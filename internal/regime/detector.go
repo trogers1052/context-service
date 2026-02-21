@@ -196,6 +196,10 @@ func (d *Detector) GetMarketContext() *MarketContext {
 
 // combineRegimes combines SPY and QQQ regimes into overall market regime
 func (d *Detector) combineRegimes(spy, qqq *SymbolRegime) (Regime, float64) {
+	if spy == nil || qqq == nil {
+		return RegimeUnknown, 0.0
+	}
+
 	// Both agree - high confidence
 	if spy.Regime == qqq.Regime {
 		avgConfidence := (spy.Confidence + qqq.Confidence) / 2

@@ -57,6 +57,13 @@ type ContextService struct {
 	// Publish interval
 	publishInterval time.Duration
 	lastPublish     time.Time
+
+	// Rate-limit gate (separate from lastPublish so the 5-min heartbeat still works)
+	rateLimitMu sync.Mutex
+	lastAttempt time.Time
+
+	// Stored context from Start() for use in callbacks
+	ctx context.Context
 }
 
 // NewContextService creates a new context service
@@ -153,15 +160,15 @@ func (s *ContextService) handleMessage(key, value []byte) error {
 
 // maybePublishContext publishes context if enough time has passed
 func (s *ContextService) maybePublishContext() {
-	// Rate limit check — must hold lock to avoid data race with publishContext(),
-	// which writes lastPublish under lastContextLock.
-	s.lastContextLock.RLock()
-	sinceLastPublish := time.Since(s.lastPublish)
-	s.lastContextLock.RUnlock()
-
-	if sinceLastPublish < s.publishInterval {
+	// Use a dedicated mutex for the rate-limit gate so lastPublish (used for the
+	// 5-minute heartbeat check in hasContextChanged) is only updated on actual publish.
+	s.rateLimitMu.Lock()
+	if time.Since(s.lastAttempt) < s.publishInterval {
+		s.rateLimitMu.Unlock()
 		return
 	}
+	s.lastAttempt = time.Now() // claim the slot atomically
+	s.rateLimitMu.Unlock()
 
 	// Need sufficient data
 	if !s.detector.HasSufficientData() {
@@ -169,15 +176,15 @@ func (s *ContextService) maybePublishContext() {
 	}
 
 	// Get current context
-	ctx := s.detector.GetMarketContext()
+	marketCtx := s.detector.GetMarketContext()
 
 	// Check if context has meaningfully changed
-	if !s.hasContextChanged(ctx) {
+	if !s.hasContextChanged(marketCtx) {
 		return
 	}
 
 	// Publish to Redis and Kafka
-	s.publishContext(ctx)
+	s.publishContext(marketCtx)
 }
 
 // hasContextChanged checks if the context has meaningfully changed
@@ -208,35 +215,41 @@ func (s *ContextService) hasContextChanged(ctx *regime.MarketContext) bool {
 }
 
 // publishContext publishes the market context to Redis and Kafka
-func (s *ContextService) publishContext(ctx *regime.MarketContext) {
-	contextJSON, err := json.Marshal(ctx)
+func (s *ContextService) publishContext(marketCtx *regime.MarketContext) {
+	contextJSON, err := json.Marshal(marketCtx)
 	if err != nil {
 		log.Printf("Failed to marshal context: %v", err)
 		return
 	}
 
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	// Publish to Redis
-	if err := s.redis.PublishContext(context.Background(), contextJSON); err != nil {
+	if err := s.redis.PublishContext(ctx, contextJSON); err != nil {
 		log.Printf("Failed to publish to Redis: %v", err)
 	} else {
 		log.Printf("Published context to Redis: regime=%s confidence=%.2f",
-			ctx.Regime, ctx.RegimeConfidence)
+			marketCtx.Regime, marketCtx.RegimeConfidence)
 	}
 
 	// Publish to Kafka
-	if err := s.producer.Publish(context.Background(), []byte("market"), contextJSON); err != nil {
+	if err := s.producer.Publish(ctx, []byte("market"), contextJSON); err != nil {
 		log.Printf("Failed to publish to Kafka: %v", err)
 	}
 
-	// Update last published
+	// Update last published context and timestamp
 	s.lastContextLock.Lock()
-	s.lastContext = ctx
+	s.lastContext = marketCtx
 	s.lastPublish = time.Now()
 	s.lastContextLock.Unlock()
 }
 
 // Start begins the service
 func (s *ContextService) Start(ctx context.Context) error {
+	s.ctx = ctx
 	log.Println("========================================")
 	log.Println("Starting Context Service")
 	log.Println("========================================")
