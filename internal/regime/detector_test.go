@@ -158,12 +158,21 @@ func TestHasSufficientData_NoIndicators_ReturnsFalse(t *testing.T) {
 	}
 }
 
-func TestHasSufficientData_SPYWithZeroSMA200_ReturnsFalse(t *testing.T) {
+func TestHasSufficientData_SPYWithZeroSMA200ButValidRSI_ReturnsTrue(t *testing.T) {
 	d := regime.NewDetector([]string{"SPY"}, nil)
-	d.UpdateIndicators(makeIndicators("SPY", 440, 430, 0, 60, 2, 1)) // SMA200 = 0
+	d.UpdateIndicators(makeIndicators("SPY", 440, 430, 0, 60, 2, 1)) // SMA200 = 0, RSI = 60
+
+	if !d.HasSufficientData() {
+		t.Error("expected true when RSI is valid even if SMA200 is zero")
+	}
+}
+
+func TestHasSufficientData_SPYWithZeroSMA200AndZeroRSI_ReturnsFalse(t *testing.T) {
+	d := regime.NewDetector([]string{"SPY"}, nil)
+	d.UpdateIndicators(makeIndicators("SPY", 440, 430, 0, 0, 2, 1)) // SMA200 = 0, RSI = 0
 
 	if d.HasSufficientData() {
-		t.Error("expected false when SMA200 is zero (insufficient history)")
+		t.Error("expected false when both SMA200 and RSI are zero")
 	}
 }
 
