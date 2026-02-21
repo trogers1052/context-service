@@ -64,6 +64,9 @@ type ContextService struct {
 
 	// Stored context from Start() for use in callbacks
 	ctx context.Context
+
+	// wg tracks goroutines so Stop() can wait for them to finish.
+	wg sync.WaitGroup
 }
 
 // NewContextService creates a new context service
@@ -247,7 +250,8 @@ func (s *ContextService) publishContext(marketCtx *regime.MarketContext) {
 	s.lastContextLock.Unlock()
 }
 
-// Start begins the service
+// Start begins the service. The caller should cancel ctx to initiate shutdown,
+// then call Stop() to wait for clean teardown.
 func (s *ContextService) Start(ctx context.Context) error {
 	s.ctx = ctx
 	log.Println("========================================")
@@ -259,12 +263,32 @@ func (s *ContextService) Start(ctx context.Context) error {
 	log.Printf("Tracking sector symbols: %v", s.config.SectorSymbols)
 	log.Println("========================================")
 
+	s.wg.Add(1)
+	defer s.wg.Done()
+
 	return s.consumer.Start(ctx)
 }
 
-// Stop gracefully shuts down the service
+// Stop gracefully shuts down the service. It waits for the consumer goroutine
+// to finish (up to 10 seconds) before closing connections, preventing races
+// where a goroutine uses a closed resource.
 func (s *ContextService) Stop() {
 	log.Println("Stopping context service...")
+
+	// Wait for Start() goroutine to exit so we don't close resources out
+	// from under it. Use a timeout to avoid hanging forever.
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Println("Consumer goroutine finished cleanly")
+	case <-time.After(10 * time.Second):
+		log.Println("Warning: timed out waiting for consumer goroutine to finish")
+	}
 
 	if s.consumer != nil {
 		s.consumer.Close()
