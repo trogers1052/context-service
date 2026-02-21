@@ -18,9 +18,13 @@ type Client struct {
 // NewClient creates a new Redis client
 func NewClient(host string, port int, password string, db int, contextKey string) *Client {
 	client := redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%d", host, port),
-		Password: password,
-		DB:       db,
+		Addr:         fmt.Sprintf("%s:%d", host, port),
+		Password:     password,
+		DB:           db,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+		PoolSize:     5,
 	})
 
 	return &Client{

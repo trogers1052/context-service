@@ -22,6 +22,10 @@ func NewProducer(brokers []string, topic string) *Producer {
 		BatchSize:    1,
 		BatchTimeout: 10 * time.Millisecond,
 		RequiredAcks: kafka.RequireOne,
+		WriteTimeout: 10 * time.Second,
+		Transport: &kafka.Transport{
+			DialTimeout: 10 * time.Second,
+		},
 	}
 
 	return &Producer{

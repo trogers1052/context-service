@@ -28,6 +28,10 @@ func NewConsumer(brokers []string, topic, groupID string, handler MessageHandler
 		MaxWait:        500 * time.Millisecond,
 		StartOffset:    kafka.LastOffset,
 		CommitInterval: time.Second,
+		Dialer: &kafka.Dialer{
+			Timeout:   10 * time.Second,
+			DualStack: true,
+		},
 	})
 
 	return &Consumer{
@@ -51,6 +55,11 @@ func (c *Consumer) Start(ctx context.Context) error {
 					return ctx.Err()
 				}
 				log.Printf("Error reading message: %v", err)
+				select {
+				case <-time.After(time.Second):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 				continue
 			}
 
