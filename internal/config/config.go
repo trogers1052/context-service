@@ -25,6 +25,9 @@ type Config struct {
 	RegimeSymbols  []string // SPY, QQQ
 	SectorSymbols  []string // XLK, XLF, XLE, etc.
 
+	// Macro enrichment (optional)
+	FREDAPIKey string // FRED API key for VIX + HY spread fetching; empty disables macro signals
+
 	// Service configuration
 	LogLevel string
 }
@@ -47,6 +50,8 @@ func Load() *Config {
 		SectorSymbols: getEnvSlice("SECTOR_SYMBOLS", []string{
 			"XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU",
 		}),
+
+		FREDAPIKey: getEnv("FRED_API_KEY", ""),
 
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 	}

@@ -1,0 +1,39 @@
+services:
+  context-service:
+    image: ghcr.io/trogers1052/context-service:latest
+    container_name: context-service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Kafka (Redpanda) — connect to the Pi's existing instance
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_INPUT_TOPIC: stock.indicators
+      KAFKA_OUTPUT_TOPIC: market.context
+      KAFKA_CONSUMER_GROUP: context-service
+
+      # Redis — connect to the Pi's existing instance
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      REDIS_CONTEXT_KEY: market:context
+
+      # Regime detection — SPY + QQQ drive the overall regime
+      REGIME_SYMBOLS: SPY,QQQ
+
+      # Sector ETFs — relative strength vs SPY
+      SECTOR_SYMBOLS: XLK,XLF,XLE,XLV,XLI,XLY,XLP,XLU
+
+      # FRED API key comes from .env (FRED_API_KEY)
+      FRED_API_KEY: ${FRED_API_KEY}
+
+      LOG_LEVEL: info
+
+    networks:
+      - trading-network
+
+networks:
+  trading-network:
+    external: true
+    name: trading-network

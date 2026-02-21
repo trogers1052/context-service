@@ -1,8 +1,11 @@
 package regime
 
 import (
+	"log"
 	"sync"
 	"time"
+
+	"github.com/trogers1052/context-service/internal/macro"
 )
 
 // Regime represents the market regime classification
@@ -52,6 +55,7 @@ type MarketContext struct {
 	SectorStrength   map[string]float64      `json:"sector_strength,omitempty"`
 	SectorLeaders    []string                `json:"sector_leaders,omitempty"`
 	SectorLaggards   []string                `json:"sector_laggards,omitempty"`
+	MacroSignals     *macro.MacroSignals     `json:"macro_signals,omitempty"`
 	Timestamp        time.Time               `json:"timestamp"`
 	UpdatedAt        time.Time               `json:"updated_at"`
 }
@@ -97,58 +101,95 @@ func (d *Detector) AnalyzeSymbol(symbol string) *SymbolRegime {
 		return nil
 	}
 
-	// Check each regime condition
-	aboveSMA200 := indicators.Close > indicators.SMA200
-	rsiBullish := indicators.RSI14 > 50
+	// Reject zero-value indicators that indicate missing/incomplete data.
+	// SMA200=0 would make any positive close appear "above SMA200" (bullish),
+	// and RSI=0 is technically possible but extremely unlikely in practice.
+	hasSMA200 := indicators.SMA200 != 0
+	hasRSI := indicators.RSI14 != 0
+
+	if !hasSMA200 {
+		log.Printf("Warning: %s has SMA200=0 (likely missing data), skipping for regime classification", symbol)
+	}
+	if !hasRSI {
+		log.Printf("Warning: %s has RSI=0 (likely missing data), skipping for regime classification", symbol)
+	}
+
+	// If both key indicators are missing, we cannot classify the regime.
+	if !hasSMA200 && !hasRSI {
+		return &SymbolRegime{
+			Symbol:     symbol,
+			Regime:     RegimeUnknown,
+			Confidence: 0.0,
+		}
+	}
+
+	// Check each regime condition, only counting indicators with valid data
 	macdBullish := indicators.MACD > indicators.MACDSignal
 
-	// Calculate trend strength (% above/below SMA200)
 	trendStrength := 0.0
-	if indicators.SMA200 > 0 {
+	if hasSMA200 {
 		trendStrength = ((indicators.Close - indicators.SMA200) / indicators.SMA200) * 100
 	}
 
-	// Determine regime based on conditions
+	// Count bullish signals only from valid indicators, and track how many
+	// indicators actually participated so we can scale confidence correctly.
 	bullishCount := 0
-	if aboveSMA200 {
-		bullishCount++
+	validCount := 0
+
+	if hasSMA200 {
+		validCount++
+		if indicators.Close > indicators.SMA200 {
+			bullishCount++
+		}
 	}
-	if rsiBullish {
-		bullishCount++
+	if hasRSI {
+		validCount++
+		if indicators.RSI14 > 50 {
+			bullishCount++
+		}
 	}
+	validCount++ // MACD is always available (two values, zero is a valid signal)
 	if macdBullish {
 		bullishCount++
 	}
 
-	var regime Regime
+	var rgm Regime
 	var confidence float64
 
-	switch bullishCount {
-	case 3:
-		regime = RegimeBull
+	bullishRatio := float64(bullishCount) / float64(validCount)
+
+	switch {
+	case bullishRatio >= 0.8:
+		rgm = RegimeBull
 		confidence = 0.9
-	case 2:
+	case bullishRatio >= 0.6:
+		aboveSMA200 := hasSMA200 && indicators.Close > indicators.SMA200
 		if aboveSMA200 {
-			regime = RegimeBull
+			rgm = RegimeBull
 			confidence = 0.7
 		} else {
-			regime = RegimeSideways
+			rgm = RegimeSideways
 			confidence = 0.6
 		}
-	case 1:
-		regime = RegimeSideways
+	case bullishRatio >= 0.3:
+		rgm = RegimeSideways
 		confidence = 0.5
-	case 0:
-		regime = RegimeBear
+	default:
+		rgm = RegimeBear
 		confidence = 0.9
+	}
+
+	// Reduce confidence when we're missing indicators
+	if validCount < 3 {
+		confidence *= float64(validCount) / 3.0
 	}
 
 	return &SymbolRegime{
 		Symbol:        symbol,
-		Regime:        regime,
+		Regime:        rgm,
 		Confidence:    confidence,
-		AboveSMA200:   aboveSMA200,
-		RSIBullish:    rsiBullish,
+		AboveSMA200:   hasSMA200 && indicators.Close > indicators.SMA200,
+		RSIBullish:    hasRSI && indicators.RSI14 > 50,
 		MACDBullish:   macdBullish,
 		TrendStrength: trendStrength,
 	}
@@ -177,13 +218,16 @@ func (d *Detector) GetMarketContext() *MarketContext {
 		ctx.QQQRegime = qqqRegime
 	}
 
-	// Determine overall regime from SPY and QQQ
-	if spyRegime != nil && qqqRegime != nil {
+	// Treat UNKNOWN regime the same as missing for combination purposes
+	spyUsable := spyRegime != nil && spyRegime.Regime != RegimeUnknown
+	qqqUsable := qqqRegime != nil && qqqRegime.Regime != RegimeUnknown
+
+	if spyUsable && qqqUsable {
 		ctx.Regime, ctx.RegimeConfidence = d.combineRegimes(spyRegime, qqqRegime)
-	} else if spyRegime != nil {
+	} else if spyUsable {
 		ctx.Regime = spyRegime.Regime
 		ctx.RegimeConfidence = spyRegime.Confidence * 0.8 // Lower confidence without QQQ
-	} else if qqqRegime != nil {
+	} else if qqqUsable {
 		ctx.Regime = qqqRegime.Regime
 		ctx.RegimeConfidence = qqqRegime.Confidence * 0.7 // Even lower without SPY
 	}
@@ -279,6 +323,6 @@ func (d *Detector) HasSufficientData() bool {
 		return false
 	}
 
-	// Check that SPY has SMA200 (meaning enough historical data)
-	return spy.SMA200 > 0
+	// Need at least one key indicator (SMA200 or RSI) with non-zero data
+	return spy.SMA200 > 0 || spy.RSI14 > 0
 }

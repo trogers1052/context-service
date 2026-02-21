@@ -10,6 +10,7 @@ import (
 
 	"github.com/trogers1052/context-service/internal/config"
 	"github.com/trogers1052/context-service/internal/kafka"
+	"github.com/trogers1052/context-service/internal/macro"
 	"github.com/trogers1052/context-service/internal/redis"
 	"github.com/trogers1052/context-service/internal/regime"
 )
@@ -46,6 +47,9 @@ type ContextService struct {
 	producer *kafka.Producer
 	redis    *redis.Client
 	detector *regime.Detector
+
+	// macroFetcher polls FRED for VIX and HY spreads (nil when not configured).
+	macroFetcher *macro.Fetcher
 
 	// Track which symbols we care about
 	trackedSymbols map[string]bool
@@ -117,6 +121,18 @@ func (s *ContextService) Initialize(ctx context.Context) error {
 		return err
 	}
 
+	// Initialize macro fetcher when FRED_API_KEY is set.
+	// The first refresh is best-effort — a failure here is non-fatal so the
+	// service can still run on technical indicators alone while FRED is down.
+	if s.config.FREDAPIKey != "" {
+		s.macroFetcher = macro.NewFetcher(s.config.FREDAPIKey)
+		if err := s.macroFetcher.Refresh(); err != nil {
+			log.Printf("Warning: initial macro fetch failed: %v — will retry every 4h", err)
+		}
+	} else {
+		log.Println("FRED_API_KEY not set — macro signals (VIX, HY spreads) disabled")
+	}
+
 	log.Println("Context service initialized")
 	return nil
 }
@@ -132,6 +148,14 @@ func (s *ContextService) handleMessage(key, value []byte) error {
 	// Only process symbols we care about
 	if !s.trackedSymbols[event.Data.Symbol] {
 		return nil
+	}
+
+	// Warn about zero-value indicators that likely indicate missing/incomplete data
+	if event.Data.SMA200 == 0 {
+		log.Printf("Warning: received SMA200=0 for %s — treating as missing data", event.Data.Symbol)
+	}
+	if event.Data.RSI14 == 0 {
+		log.Printf("Warning: received RSI=0 for %s — treating as missing data", event.Data.Symbol)
 	}
 
 	// Update detector with new indicators
@@ -180,6 +204,12 @@ func (s *ContextService) maybePublishContext() {
 
 	// Get current context
 	marketCtx := s.detector.GetMarketContext()
+
+	// Enrich with macro signals when available (VIX, HY credit spreads).
+	// This may adjust the regime — e.g. VIX > 35 overrides BULL → BEAR.
+	if s.macroFetcher != nil {
+		regime.ApplyMacroAdjustments(marketCtx, s.macroFetcher.Get())
+	}
 
 	// Check if context has meaningfully changed
 	if !s.hasContextChanged(marketCtx) {
@@ -263,10 +293,36 @@ func (s *ContextService) Start(ctx context.Context) error {
 	log.Printf("Tracking sector symbols: %v", s.config.SectorSymbols)
 	log.Println("========================================")
 
+	// Start macro refresher goroutine (polls FRED every 4 hours).
+	if s.macroFetcher != nil {
+		s.wg.Add(1)
+		go s.runMacroRefresher(ctx)
+	}
+
 	s.wg.Add(1)
 	defer s.wg.Done()
 
 	return s.consumer.Start(ctx)
+}
+
+// runMacroRefresher polls the FRED API every 4 hours to refresh VIX and HY
+// spread data.  It exits when ctx is cancelled (i.e., on graceful shutdown).
+func (s *ContextService) runMacroRefresher(ctx context.Context) {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(4 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.macroFetcher.Refresh(); err != nil {
+				log.Printf("Macro refresh failed: %v", err)
+			}
+		}
+	}
 }
 
 // Stop gracefully shuts down the service. It waits for the consumer goroutine
