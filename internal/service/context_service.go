@@ -153,8 +153,13 @@ func (s *ContextService) handleMessage(key, value []byte) error {
 
 // maybePublishContext publishes context if enough time has passed
 func (s *ContextService) maybePublishContext() {
-	// Rate limit publishing
-	if time.Since(s.lastPublish) < s.publishInterval {
+	// Rate limit check — must hold lock to avoid data race with publishContext(),
+	// which writes lastPublish under lastContextLock.
+	s.lastContextLock.RLock()
+	sinceLastPublish := time.Since(s.lastPublish)
+	s.lastContextLock.RUnlock()
+
+	if sinceLastPublish < s.publishInterval {
 		return
 	}
 
