@@ -49,6 +49,7 @@ func Load() *Config {
 		RegimeSymbols: getEnvSlice("REGIME_SYMBOLS", []string{"SPY", "QQQ"}),
 		SectorSymbols: getEnvSlice("SECTOR_SYMBOLS", []string{
 			"XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU",
+			"XLB", "GDX", "GLD", "XME", "URA", "SIL", "REMX",
 		}),
 
 		FREDAPIKey: getEnv("FRED_API_KEY", ""),

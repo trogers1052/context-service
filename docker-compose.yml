@@ -22,8 +22,8 @@ services:
       # Regime detection — SPY + QQQ drive the overall regime
       REGIME_SYMBOLS: SPY,QQQ
 
-      # Sector ETFs — relative strength vs SPY
-      SECTOR_SYMBOLS: XLK,XLF,XLE,XLV,XLI,XLY,XLP,XLU
+      # Sector ETFs + mining/commodity ETFs — relative strength vs SPY
+      SECTOR_SYMBOLS: XLK,XLF,XLE,XLV,XLI,XLY,XLP,XLU,XLB,GDX,GLD,XME,URA,SIL,REMX
 
       # FRED API key comes from .env (FRED_API_KEY)
       FRED_API_KEY: ${FRED_API_KEY}
