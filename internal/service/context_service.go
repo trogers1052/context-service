@@ -176,8 +176,8 @@ func (s *ContextService) handleMessage(key, value []byte) error {
 	}
 	s.detector.UpdateIndicators(indicators)
 
-	log.Printf("Updated indicators for %s (RSI: %.1f, Close: %.2f, SMA200: %.2f)",
-		event.Data.Symbol, event.Data.RSI14, event.Data.Close, event.Data.SMA200)
+	// Per-indicator updates are high-frequency; don't log every one.
+	// Regime changes and context publishes are logged in publishContext.
 
 	// Maybe publish updated context
 	s.maybePublishContext()
@@ -214,6 +214,19 @@ func (s *ContextService) maybePublishContext() {
 	// Check if context has meaningfully changed
 	if !s.hasContextChanged(marketCtx) {
 		return
+	}
+
+	// Log regime detection result at publish time (not per-indicator)
+	s.lastContextLock.RLock()
+	prevRegime := "none"
+	if s.lastContext != nil {
+		prevRegime = string(s.lastContext.Regime)
+	}
+	s.lastContextLock.RUnlock()
+
+	if prevRegime != string(marketCtx.Regime) {
+		log.Printf("Regime change detected: %s -> %s (confidence=%.2f)",
+			prevRegime, marketCtx.Regime, marketCtx.RegimeConfidence)
 	}
 
 	// Publish to Redis and Kafka
@@ -271,6 +284,9 @@ func (s *ContextService) publishContext(marketCtx *regime.MarketContext) {
 	// Publish to Kafka
 	if err := s.producer.Publish(ctx, []byte("market"), contextJSON); err != nil {
 		log.Printf("Failed to publish to Kafka: %v", err)
+	} else {
+		log.Printf("Published context to Kafka: regime=%s confidence=%.2f",
+			marketCtx.Regime, marketCtx.RegimeConfidence)
 	}
 
 	// Update last published context and timestamp
@@ -320,6 +336,10 @@ func (s *ContextService) runMacroRefresher(ctx context.Context) {
 		case <-ticker.C:
 			if err := s.macroFetcher.Refresh(); err != nil {
 				log.Printf("Macro refresh failed: %v", err)
+			} else {
+				signals := s.macroFetcher.Get()
+				log.Printf("FRED macro refresh: VIX=%.2f (%s), HY=%.2f%% (%s)",
+					signals.VIX, signals.VIXLevel, signals.HYSpread, signals.HYLevel)
 			}
 		}
 	}
