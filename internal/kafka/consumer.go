@@ -31,14 +31,13 @@ type Consumer struct {
 // NewConsumer creates a new Kafka consumer
 func NewConsumer(brokers []string, topic, groupID string, handler MessageHandler) *Consumer {
 	cfg := kafka.ReaderConfig{
-		Brokers:        brokers,
-		Topic:          topic,
-		GroupID:        groupID,
-		MinBytes:       1,
-		MaxBytes:       10e6, // 10MB
-		MaxWait:        500 * time.Millisecond,
-		StartOffset:    kafka.LastOffset,
-		CommitInterval: time.Second,
+		Brokers:     brokers,
+		Topic:       topic,
+		GroupID:     groupID,
+		MinBytes:    1,
+		MaxBytes:    10e6, // 10MB
+		MaxWait:     500 * time.Millisecond,
+		StartOffset: kafka.LastOffset,
 		Dialer: &kafka.Dialer{
 			Timeout:   10 * time.Second,
 			DualStack: true,
@@ -130,7 +129,7 @@ func (c *Consumer) consumeLoop(ctx context.Context) (hadSuccess bool, err error)
 		case <-ctx.Done():
 			return hadSuccess, ctx.Err()
 		default:
-			msg, readErr := c.reader.ReadMessage(ctx)
+			msg, readErr := c.reader.FetchMessage(ctx)
 			if readErr != nil {
 				if ctx.Err() != nil {
 					return hadSuccess, ctx.Err()
@@ -159,6 +158,12 @@ func (c *Consumer) consumeLoop(ctx context.Context) (hadSuccess bool, err error)
 
 			if handleErr := c.handler(msg.Key, msg.Value); handleErr != nil {
 				log.Printf("Error handling message: %v", handleErr)
+				// Don't commit — message will be redelivered on restart
+				continue
+			}
+
+			if commitErr := c.reader.CommitMessages(ctx, msg); commitErr != nil {
+				log.Printf("Error committing offset: %v", commitErr)
 			}
 		}
 	}

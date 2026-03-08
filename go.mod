@@ -1,6 +1,6 @@
 module github.com/trogers1052/context-service
 
-go 1.22
+go 1.24
 
 require (
 	github.com/json-iterator/go v1.1.12
