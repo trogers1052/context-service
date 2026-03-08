@@ -8,6 +8,14 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+const (
+	// publishMaxRetries is the number of times to retry a failed Kafka publish.
+	// Market context updates are critical for regime-aware trading decisions —
+	// a missed publish leaves the decision-engine on stale regime data.
+	publishMaxRetries = 3
+	publishInitialBackoff = 100 * time.Millisecond
+)
+
 // Producer publishes messages to a Kafka topic
 type Producer struct {
 	writer *kafka.Writer
@@ -33,20 +41,40 @@ func NewProducer(brokers []string, topic string) *Producer {
 	}
 }
 
-// Publish sends a message to Kafka
+// Publish sends a message to Kafka with exponential backoff retry.
+// Retries up to publishMaxRetries times (100ms, 200ms, 400ms) before
+// returning the error. Context cancellation is respected between retries.
 func (p *Producer) Publish(ctx context.Context, key, value []byte) error {
-	err := p.writer.WriteMessages(ctx, kafka.Message{
+	msg := kafka.Message{
 		Key:   key,
 		Value: value,
 		Time:  time.Now(),
-	})
-
-	if err != nil {
-		log.Printf("Error publishing to Kafka: %v", err)
-		return err
 	}
 
-	return nil
+	var err error
+	backoff := publishInitialBackoff
+
+	for attempt := 1; attempt <= publishMaxRetries; attempt++ {
+		err = p.writer.WriteMessages(ctx, msg)
+		if err == nil {
+			return nil
+		}
+
+		if attempt < publishMaxRetries {
+			log.Printf("Kafka publish attempt %d/%d failed: %v — retrying in %s",
+				attempt, publishMaxRetries, err, backoff)
+
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			backoff *= 2
+		}
+	}
+
+	log.Printf("CRITICAL: Kafka publish FAILED after %d attempts: %v — context update may be lost", publishMaxRetries, err)
+	return err
 }
 
 // Close closes the producer

@@ -39,6 +39,9 @@ func main() {
 	}()
 	log.Printf("Health endpoint: http://localhost:%s/health", healthPort)
 
+	// Metrics endpoint — Prometheus scrape target
+	startMetricsServer()
+
 	// Load configuration
 	cfg := config.Load()
 
