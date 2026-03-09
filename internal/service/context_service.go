@@ -11,6 +11,7 @@ import (
 	"github.com/trogers1052/context-service/internal/config"
 	"github.com/trogers1052/context-service/internal/kafka"
 	"github.com/trogers1052/context-service/internal/macro"
+	"github.com/trogers1052/context-service/internal/metrics"
 	"github.com/trogers1052/context-service/internal/redis"
 	"github.com/trogers1052/context-service/internal/regime"
 )
@@ -126,8 +127,16 @@ func (s *ContextService) Initialize(ctx context.Context) error {
 	// service can still run on technical indicators alone while FRED is down.
 	if s.config.FREDAPIKey != "" {
 		s.macroFetcher = macro.NewFetcher(s.config.FREDAPIKey)
+		fredStart := time.Now()
 		if err := s.macroFetcher.Refresh(); err != nil {
 			log.Printf("Warning: initial macro fetch failed: %v — will retry every 4h", err)
+			metrics.FredFetchErrors.Inc()
+		} else {
+			metrics.FredFetchDuration.Observe(time.Since(fredStart).Seconds())
+			signals := s.macroFetcher.Get()
+			if signals.Available {
+				metrics.VixLevel.Set(signals.VIX)
+			}
 		}
 	} else {
 		log.Println("FRED_API_KEY not set — macro signals (VIX, HY spreads) disabled")
@@ -142,6 +151,7 @@ func (s *ContextService) handleMessage(key, value []byte) error {
 	var event IndicatorEvent
 	if err := json.Unmarshal(value, &event); err != nil {
 		log.Printf("Failed to unmarshal indicator event: %v", err)
+		metrics.ParseErrors.Inc()
 		return nil // Don't return error to avoid blocking consumer
 	}
 
@@ -149,6 +159,8 @@ func (s *ContextService) handleMessage(key, value []byte) error {
 	if !s.trackedSymbols[event.Data.Symbol] {
 		return nil
 	}
+
+	metrics.KafkaConsumed.WithLabelValues(event.Data.Symbol).Inc()
 
 	// Warn about zero-value indicators that likely indicate missing/incomplete data
 	if event.Data.SMA200 == 0 {
@@ -227,6 +239,8 @@ func (s *ContextService) maybePublishContext() {
 	if prevRegime != string(marketCtx.Regime) {
 		log.Printf("Regime change detected: %s -> %s (confidence=%.2f)",
 			prevRegime, marketCtx.Regime, marketCtx.RegimeConfidence)
+		metrics.RegimeTransitions.WithLabelValues(prevRegime, string(marketCtx.Regime)).Inc()
+		metrics.SetCurrentRegime(string(marketCtx.Regime))
 	}
 
 	// Publish to Redis and Kafka
@@ -273,10 +287,21 @@ func (s *ContextService) publishContext(marketCtx *regime.MarketContext) {
 		ctx = context.Background()
 	}
 
+	// Determine publish reason for metrics.
+	reason := "change_detected"
+	s.lastContextLock.RLock()
+	if s.lastContext != nil && marketCtx.Regime == s.lastContext.Regime {
+		reason = "heartbeat"
+	}
+	s.lastContextLock.RUnlock()
+
 	// Publish to Redis
+	redisStart := time.Now()
 	if err := s.redis.PublishContext(ctx, contextJSON); err != nil {
 		log.Printf("Failed to publish to Redis: %v", err)
+		metrics.RedisWriteErrors.Inc()
 	} else {
+		metrics.RedisWriteDuration.Observe(time.Since(redisStart).Seconds())
 		log.Printf("Published context to Redis: regime=%s confidence=%.2f",
 			marketCtx.Regime, marketCtx.RegimeConfidence)
 	}
@@ -284,9 +309,16 @@ func (s *ContextService) publishContext(marketCtx *regime.MarketContext) {
 	// Publish to Kafka
 	if err := s.producer.Publish(ctx, []byte("market"), contextJSON); err != nil {
 		log.Printf("Failed to publish to Kafka: %v", err)
+		metrics.KafkaPublishErrors.Inc()
 	} else {
+		metrics.KafkaPublished.WithLabelValues(reason).Inc()
 		log.Printf("Published context to Kafka: regime=%s confidence=%.2f",
 			marketCtx.Regime, marketCtx.RegimeConfidence)
+	}
+
+	// Update sector strength gauges
+	for sector, strength := range marketCtx.SectorStrength {
+		metrics.SectorStrength.WithLabelValues(sector).Set(strength)
 	}
 
 	// Update last published context and timestamp
@@ -334,12 +366,18 @@ func (s *ContextService) runMacroRefresher(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			fredStart := time.Now()
 			if err := s.macroFetcher.Refresh(); err != nil {
 				log.Printf("Macro refresh failed: %v", err)
+				metrics.FredFetchErrors.Inc()
 			} else {
+				metrics.FredFetchDuration.Observe(time.Since(fredStart).Seconds())
 				signals := s.macroFetcher.Get()
 				log.Printf("FRED macro refresh: VIX=%.2f (%s), HY=%.2f%% (%s)",
 					signals.VIX, signals.VIXLevel, signals.HYSpread, signals.HYLevel)
+				if signals.Available {
+					metrics.VixLevel.Set(signals.VIX)
+				}
 			}
 		}
 	}

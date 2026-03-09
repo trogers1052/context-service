@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+
+	"github.com/trogers1052/context-service/internal/metrics"
 )
 
 const (
@@ -112,6 +114,7 @@ func (c *Consumer) Start(ctx context.Context) error {
 
 		// Create a fresh reader.
 		c.reader = c.newReader()
+		metrics.KafkaReconnects.Inc()
 		log.Printf("Created new Kafka reader for topic: %s", c.config.Topic)
 	}
 }

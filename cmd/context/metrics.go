@@ -6,6 +6,9 @@ import (
 	"os"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	// Import metrics package so promauto registrations take effect.
+	_ "github.com/trogers1052/context-service/internal/metrics"
 )
 
 func startMetricsServer() {
