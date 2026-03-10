@@ -31,4 +31,7 @@ COPY --from=builder /app/context-service .
 RUN adduser -D -g '' appuser
 USER appuser
 
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
+    CMD wget -q --spider http://localhost:8080/health || exit 1
+
 ENTRYPOINT ["./context-service"]
