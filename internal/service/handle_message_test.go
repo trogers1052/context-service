@@ -16,22 +16,26 @@ func TestHandleMessage_ValidIndicatorEvent_UpdatesDetector(t *testing.T) {
 	svc := newTestService()
 	svc.lastAttempt = time.Now() // block rate limiter so publish path is skipped
 
+	// Matches actual analytics-service format: nested under data.indicators,
+	// UPPERCASE keys for technical indicators.
 	msg := `{
 		"event_type": "indicator_update",
 		"data": {
 			"symbol": "SPY",
-			"timestamp": "2026-02-20T10:00:00Z",
-			"close": 500.0,
-			"sma_20": 495.0,
-			"sma_50": 480.0,
-			"sma_200": 450.0,
-			"rsi_14": 60.5,
-			"macd": 2.5,
-			"macd_signal": 1.8,
-			"macd_histogram": 0.7,
-			"atr_14": 5.0,
-			"volume": 1000000,
-			"volume_sma_20": 900000
+			"time": "2026-02-20T10:00:00Z",
+			"indicators": {
+				"close": 500.0,
+				"SMA_20": 495.0,
+				"SMA_50": 480.0,
+				"SMA_200": 450.0,
+				"RSI_14": 60.5,
+				"MACD": 2.5,
+				"MACD_SIGNAL": 1.8,
+				"MACD_HISTOGRAM": 0.7,
+				"ATR_14": 5.0,
+				"volume": 1000000,
+				"volume_sma_20": 900000
+			}
 		}
 	}`
 
@@ -70,11 +74,13 @@ func TestHandleMessage_UntrackedSymbol_Ignored(t *testing.T) {
 		"event_type": "indicator_update",
 		"data": {
 			"symbol": "AAPL",
-			"close": 180.0,
-			"sma_200": 170.0,
-			"rsi_14": 55.0,
-			"macd": 1.0,
-			"macd_signal": 0.8
+			"indicators": {
+				"close": 180.0,
+				"SMA_200": 170.0,
+				"RSI_14": 55.0,
+				"MACD": 1.0,
+				"MACD_SIGNAL": 0.8
+			}
 		}
 	}`
 
@@ -116,18 +122,20 @@ func TestHandleMessage_AllFieldsMapped(t *testing.T) {
 		"event_type": "indicator_update",
 		"data": {
 			"symbol": "QQQ",
-			"timestamp": "2026-02-20T10:00:00Z",
-			"close": 420.0,
-			"volume": 500000,
-			"sma_20": 415.0,
-			"sma_50": 410.0,
-			"sma_200": 380.0,
-			"rsi_14": 55.0,
-			"macd": 3.0,
-			"macd_signal": 2.0,
-			"macd_histogram": 1.0,
-			"atr_14": 4.5,
-			"volume_sma_20": 480000.0
+			"time": "2026-02-20T10:00:00Z",
+			"indicators": {
+				"close": 420.0,
+				"volume": 500000,
+				"SMA_20": 415.0,
+				"SMA_50": 410.0,
+				"SMA_200": 380.0,
+				"RSI_14": 55.0,
+				"MACD": 3.0,
+				"MACD_SIGNAL": 2.0,
+				"MACD_HISTOGRAM": 1.0,
+				"ATR_14": 4.5,
+				"volume_sma_20": 480000.0
+			}
 		}
 	}`
 
@@ -162,11 +170,13 @@ func TestHandleMessage_SectorSymbol_Tracked(t *testing.T) {
 		"event_type": "indicator_update",
 		"data": {
 			"symbol": "XLK",
-			"close": 200.0,
-			"sma_200": 180.0,
-			"rsi_14": 60.0,
-			"macd": 1.5,
-			"macd_signal": 1.0
+			"indicators": {
+				"close": 200.0,
+				"SMA_200": 180.0,
+				"RSI_14": 60.0,
+				"MACD": 1.5,
+				"MACD_SIGNAL": 1.0
+			}
 		}
 	}`
 

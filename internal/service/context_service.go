@@ -18,27 +18,63 @@ import (
 
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
-// IndicatorEvent represents an incoming indicator message from analytics-service
+// IndicatorEvent represents an incoming indicator message from analytics-service.
+//
+// analytics-service publishes indicators nested under data.indicators with
+// UPPERCASE keys (e.g. "SMA_200", "RSI_14").  We unmarshal into a generic
+// map and extract the fields we need with case-insensitive lookup so the
+// context-service is robust to casing changes.
 type IndicatorEvent struct {
-	EventType string                 `json:"event_type"`
-	Data      IndicatorData          `json:"data"`
+	EventType string        `json:"event_type"`
+	Data      IndicatorData `json:"data"`
 }
 
-// IndicatorData contains the indicator values
+// IndicatorData mirrors the "data" object in the Kafka message.
 type IndicatorData struct {
-	Symbol        string    `json:"symbol"`
-	Timestamp     time.Time `json:"timestamp"`
-	Close         float64   `json:"close"`
-	Volume        int64     `json:"volume"`
-	SMA20         float64   `json:"sma_20"`
-	SMA50         float64   `json:"sma_50"`
-	SMA200        float64   `json:"sma_200"`
-	RSI14         float64   `json:"rsi_14"`
-	MACD          float64   `json:"macd"`
-	MACDSignal    float64   `json:"macd_signal"`
-	MACDHistogram float64   `json:"macd_histogram"`
-	ATR14         float64   `json:"atr_14"`
-	VolumeSMA20   float64   `json:"volume_sma_20"`
+	Symbol     string             `json:"symbol"`
+	Time       string             `json:"time"`
+	Indicators map[string]float64 `json:"indicators"`
+}
+
+// parsedIndicators holds the typed indicator values extracted from the map.
+type parsedIndicators struct {
+	Close         float64
+	Volume        int64
+	SMA20         float64
+	SMA50         float64
+	SMA200        float64
+	RSI14         float64
+	MACD          float64
+	MACDSignal    float64
+	MACDHistogram float64
+	ATR14         float64
+	VolumeSMA20   float64
+	Timestamp     time.Time
+}
+
+// extractIndicators pulls typed values from the raw indicators map.
+// analytics-service uses UPPERCASE keys (SMA_200, RSI_14, MACD, etc.)
+func extractIndicators(d *IndicatorData) parsedIndicators {
+	m := d.Indicators
+	p := parsedIndicators{
+		Close:         m["close"],
+		Volume:        int64(m["volume"]),
+		SMA20:         m["SMA_20"],
+		SMA50:         m["SMA_50"],
+		SMA200:        m["SMA_200"],
+		RSI14:         m["RSI_14"],
+		MACD:          m["MACD"],
+		MACDSignal:    m["MACD_SIGNAL"],
+		MACDHistogram: m["MACD_HISTOGRAM"],
+		ATR14:         m["ATR_14"],
+		VolumeSMA20:   m["volume_sma_20"],
+	}
+	if d.Time != "" {
+		if t, err := time.Parse(time.RFC3339Nano, d.Time); err == nil {
+			p.Timestamp = t
+		}
+	}
+	return p
 }
 
 // ContextService is the main service orchestrator
@@ -162,29 +198,32 @@ func (s *ContextService) handleMessage(key, value []byte) error {
 
 	metrics.KafkaConsumed.WithLabelValues(event.Data.Symbol).Inc()
 
+	// Extract typed indicators from the nested map
+	p := extractIndicators(&event.Data)
+
 	// Warn about zero-value indicators that likely indicate missing/incomplete data
-	if event.Data.SMA200 == 0 {
+	if p.SMA200 == 0 {
 		log.Printf("Warning: received SMA200=0 for %s — treating as missing data", event.Data.Symbol)
 	}
-	if event.Data.RSI14 == 0 {
+	if p.RSI14 == 0 {
 		log.Printf("Warning: received RSI=0 for %s — treating as missing data", event.Data.Symbol)
 	}
 
 	// Update detector with new indicators
 	indicators := &regime.Indicators{
 		Symbol:        event.Data.Symbol,
-		Close:         event.Data.Close,
-		SMA20:         event.Data.SMA20,
-		SMA50:         event.Data.SMA50,
-		SMA200:        event.Data.SMA200,
-		RSI14:         event.Data.RSI14,
-		MACD:          event.Data.MACD,
-		MACDSignal:    event.Data.MACDSignal,
-		MACDHistogram: event.Data.MACDHistogram,
-		ATR14:         event.Data.ATR14,
-		Volume:        event.Data.Volume,
-		VolumeSMA20:   event.Data.VolumeSMA20,
-		Timestamp:     event.Data.Timestamp,
+		Close:         p.Close,
+		SMA20:         p.SMA20,
+		SMA50:         p.SMA50,
+		SMA200:        p.SMA200,
+		RSI14:         p.RSI14,
+		MACD:          p.MACD,
+		MACDSignal:    p.MACDSignal,
+		MACDHistogram: p.MACDHistogram,
+		ATR14:         p.ATR14,
+		Volume:        p.Volume,
+		VolumeSMA20:   p.VolumeSMA20,
+		Timestamp:     p.Timestamp,
 	}
 	s.detector.UpdateIndicators(indicators)
 
