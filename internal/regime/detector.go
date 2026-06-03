@@ -37,35 +37,35 @@ type Indicators struct {
 
 // SymbolRegime represents the regime analysis for a single symbol
 type SymbolRegime struct {
-	Symbol         string  `json:"symbol"`
-	Regime         Regime  `json:"regime"`
-	Confidence     float64 `json:"confidence"`
-	AboveSMA200    bool    `json:"above_sma_200"`
-	RSIBullish     bool    `json:"rsi_bullish"`
-	MACDBullish    bool    `json:"macd_bullish"`
-	TrendStrength  float64 `json:"trend_strength"` // % above/below SMA200
+	Symbol        string  `json:"symbol"`
+	Regime        Regime  `json:"regime"`
+	Confidence    float64 `json:"confidence"`
+	AboveSMA200   bool    `json:"above_sma_200"`
+	RSIBullish    bool    `json:"rsi_bullish"`
+	MACDBullish   bool    `json:"macd_bullish"`
+	TrendStrength float64 `json:"trend_strength"` // % above/below SMA200
 }
 
 // MarketContext represents the overall market context
 type MarketContext struct {
-	Regime           Regime                  `json:"regime"`
-	RegimeConfidence float64                 `json:"regime_confidence"`
-	SPYRegime        *SymbolRegime           `json:"spy_regime,omitempty"`
-	QQQRegime        *SymbolRegime           `json:"qqq_regime,omitempty"`
-	SectorStrength   map[string]float64      `json:"sector_strength,omitempty"`
-	SectorLeaders    []string                `json:"sector_leaders,omitempty"`
-	SectorLaggards   []string                `json:"sector_laggards,omitempty"`
-	MacroSignals     *macro.MacroSignals     `json:"macro_signals,omitempty"`
-	Timestamp        time.Time               `json:"timestamp"`
-	UpdatedAt        time.Time               `json:"updated_at"`
+	Regime           Regime              `json:"regime"`
+	RegimeConfidence float64             `json:"regime_confidence"`
+	SPYRegime        *SymbolRegime       `json:"spy_regime,omitempty"`
+	QQQRegime        *SymbolRegime       `json:"qqq_regime,omitempty"`
+	SectorStrength   map[string]float64  `json:"sector_strength,omitempty"`
+	SectorLeaders    []string            `json:"sector_leaders,omitempty"`
+	SectorLaggards   []string            `json:"sector_laggards,omitempty"`
+	MacroSignals     *macro.MacroSignals `json:"macro_signals,omitempty"`
+	Timestamp        time.Time           `json:"timestamp"`
+	UpdatedAt        time.Time           `json:"updated_at"`
 }
 
 // Detector analyzes indicators to determine market regime
 type Detector struct {
-	mu              sync.RWMutex
+	mu               sync.RWMutex
 	symbolIndicators map[string]*Indicators
-	regimeSymbols   []string
-	sectorSymbols   []string
+	regimeSymbols    []string
+	sectorSymbols    []string
 }
 
 // NewDetector creates a new regime detector

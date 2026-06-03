@@ -6,56 +6,6 @@ import (
 	"testing"
 )
 
-// ---- containsSubstring ------------------------------------------------------
-
-func TestContainsSubstring_Found(t *testing.T) {
-	if !containsSubstring("connection refused", "refused") {
-		t.Error("expected true")
-	}
-}
-
-func TestContainsSubstring_AtStart(t *testing.T) {
-	if !containsSubstring("connection refused", "connection") {
-		t.Error("expected true at start")
-	}
-}
-
-func TestContainsSubstring_ExactMatch(t *testing.T) {
-	if !containsSubstring("EOF", "EOF") {
-		t.Error("expected true on exact match")
-	}
-}
-
-func TestContainsSubstring_NotFound(t *testing.T) {
-	if containsSubstring("connection refused", "timeout") {
-		t.Error("expected false")
-	}
-}
-
-func TestContainsSubstring_EmptySubstring(t *testing.T) {
-	if !containsSubstring("anything", "") {
-		t.Error("expected true for empty substring")
-	}
-}
-
-func TestContainsSubstring_EmptyString(t *testing.T) {
-	if containsSubstring("", "something") {
-		t.Error("expected false for empty string with non-empty substring")
-	}
-}
-
-func TestContainsSubstring_BothEmpty(t *testing.T) {
-	if !containsSubstring("", "") {
-		t.Error("expected true for both empty")
-	}
-}
-
-func TestContainsSubstring_SubLongerThanString(t *testing.T) {
-	if containsSubstring("ab", "abc") {
-		t.Error("expected false when substring is longer than string")
-	}
-}
-
 // ---- isConnectionError ------------------------------------------------------
 
 func TestIsConnectionError_Nil_ReturnsFalse(t *testing.T) {

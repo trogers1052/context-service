@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -71,17 +72,7 @@ func isConnectionError(err error) bool {
 		"EOF",
 		"use of closed network connection",
 	} {
-		if len(s) >= len(sub) && containsSubstring(s, sub) {
-			return true
-		}
-	}
-	return false
-}
-
-// containsSubstring is a simple contains check to avoid importing strings.
-func containsSubstring(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
+		if strings.Contains(s, sub) {
 			return true
 		}
 	}

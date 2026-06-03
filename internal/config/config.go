@@ -9,10 +9,10 @@ import (
 // Config holds all configuration for the context service
 type Config struct {
 	// Kafka configuration
-	KafkaBrokers       []string
-	InputTopic         string // stock.indicators
-	OutputTopic        string // market.context
-	ConsumerGroup      string
+	KafkaBrokers  []string
+	InputTopic    string // stock.indicators
+	OutputTopic   string // market.context
+	ConsumerGroup string
 
 	// Redis configuration
 	RedisHost     string
@@ -22,8 +22,8 @@ type Config struct {
 	ContextKey    string // market:context
 
 	// Regime detection symbols
-	RegimeSymbols  []string // SPY, QQQ
-	SectorSymbols  []string // XLK, XLF, XLE, etc.
+	RegimeSymbols []string // SPY, QQQ
+	SectorSymbols []string // XLK, XLF, XLE, etc.
 
 	// Macro enrichment (optional)
 	FREDAPIKey string // FRED API key for VIX + HY spread fetching; empty disables macro signals

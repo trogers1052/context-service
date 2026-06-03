@@ -12,7 +12,7 @@ const (
 	// publishMaxRetries is the number of times to retry a failed Kafka publish.
 	// Market context updates are critical for regime-aware trading decisions —
 	// a missed publish leaves the decision-engine on stale regime data.
-	publishMaxRetries = 3
+	publishMaxRetries     = 3
 	publishInitialBackoff = 100 * time.Millisecond
 )
 
