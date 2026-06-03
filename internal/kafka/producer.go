@@ -3,81 +3,89 @@ package kafka
 import (
 	"context"
 	"log"
-	"time"
+	"sync"
 
-	"github.com/segmentio/kafka-go"
+	commonskafka "github.com/trogers1052/trading-go-commons/kafka"
 )
 
-const (
-	// publishMaxRetries is the number of times to retry a failed Kafka publish.
-	// Market context updates are critical for regime-aware trading decisions —
-	// a missed publish leaves the decision-engine on stale regime data.
-	publishMaxRetries     = 3
-	publishInitialBackoff = 100 * time.Millisecond
-)
-
-// Producer publishes messages to a Kafka topic
+// Producer publishes messages to a Kafka topic using the shared, sarama-based
+// durable Producer from trading-go-commons.
+//
+// Behaviour preserved from the previous kafka-go implementation:
+//   - same output topic (passed through from config),
+//   - same key/value bytes for each publish,
+//   - durable acks with bounded retry/backoff. The shared producer waits for all
+//     in-sync replicas (sarama.WaitForAll) by default — at least as durable as
+//     the previous RequireOne — and retries on transient failures, so market
+//     context updates aren't silently lost.
 type Producer struct {
-	writer *kafka.Writer
+	brokers []string
+	topic   string
+
+	// prod is the shared producer, created lazily on first Publish so that
+	// constructing a Producer never requires a live broker (matching the old
+	// kafka-go writer's lazy-connect behaviour and the existing tests).
+	mu   sync.Mutex
+	prod *commonskafka.Producer
 }
 
-// NewProducer creates a new Kafka producer
+// NewProducer creates a new Kafka producer. It does not dial the broker; the
+// underlying producer is created on the first Publish call.
 func NewProducer(brokers []string, topic string) *Producer {
-	writer := &kafka.Writer{
-		Addr:         kafka.TCP(brokers...),
-		Topic:        topic,
-		Balancer:     &kafka.LeastBytes{},
-		BatchSize:    1,
-		BatchTimeout: 10 * time.Millisecond,
-		RequiredAcks: kafka.RequireOne,
-		WriteTimeout: 10 * time.Second,
-		Transport: &kafka.Transport{
-			DialTimeout: 10 * time.Second,
-		},
-	}
-
 	return &Producer{
-		writer: writer,
+		brokers: brokers,
+		topic:   topic,
 	}
 }
 
-// Publish sends a message to Kafka with exponential backoff retry.
-// Retries up to publishMaxRetries times (100ms, 200ms, 400ms) before
-// returning the error. Context cancellation is respected between retries.
+// producer returns the lazily-initialised shared producer, creating it on first
+// use.
+func (p *Producer) producer() (*commonskafka.Producer, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.prod != nil {
+		return p.prod, nil
+	}
+
+	prod, err := commonskafka.NewProducer(
+		p.brokers,
+		commonskafka.WithClientID("context-service"),
+	)
+	if err != nil {
+		return nil, err
+	}
+	p.prod = prod
+	return p.prod, nil
+}
+
+// Publish sends a message to the configured topic with durable acks. The shared
+// producer performs bounded internal retries with backoff; a returned error
+// means the write permanently failed and the context update may be lost.
 func (p *Producer) Publish(ctx context.Context, key, value []byte) error {
-	msg := kafka.Message{
-		Key:   key,
-		Value: value,
-		Time:  time.Now(),
+	prod, err := p.producer()
+	if err != nil {
+		log.Printf("CRITICAL: Kafka producer init FAILED: %v — context update may be lost", err)
+		return err
 	}
 
-	var err error
-	backoff := publishInitialBackoff
-
-	for attempt := 1; attempt <= publishMaxRetries; attempt++ {
-		err = p.writer.WriteMessages(ctx, msg)
-		if err == nil {
-			return nil
-		}
-
-		if attempt < publishMaxRetries {
-			log.Printf("Kafka publish attempt %d/%d failed: %v — retrying in %s",
-				attempt, publishMaxRetries, err, backoff)
-
-			select {
-			case <-time.After(backoff):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			backoff *= 2
-		}
+	if err := prod.Publish(ctx, p.topic, key, value); err != nil {
+		log.Printf("CRITICAL: Kafka publish FAILED: %v — context update may be lost", err)
+		return err
 	}
-
-	log.Printf("CRITICAL: Kafka publish FAILED after %d attempts: %v — context update may be lost", publishMaxRetries, err)
-	return err
+	return nil
 }
 
-// Close closes the producer
+// Close closes the underlying producer. It is safe to call before any Publish
+// (no-op) and is idempotent.
 func (p *Producer) Close() error {
-	return p.writer.Close()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.prod == nil {
+		return nil
+	}
+	err := p.prod.Close()
+	p.prod = nil
+	return err
 }

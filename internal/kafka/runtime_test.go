@@ -8,43 +8,43 @@ import (
 
 // ---- Producer.Publish -------------------------------------------------------
 
-func TestPublish_ContextAlreadyCancelled_ReturnsCtxErr(t *testing.T) {
-	// Point at a dead broker so WriteMessages fails, then the retry backoff
-	// select observes the cancelled context and returns ctx.Err().
+func TestPublish_DeadBroker_ReturnsError(t *testing.T) {
+	// Point at a dead broker: lazily creating the shared SyncProducer fails
+	// (out of brokers), so Publish returns a non-nil error rather than silently
+	// dropping the context update.
+	p := NewProducer([]string{"127.0.0.1:1"}, "test.topic")
+	defer p.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := p.Publish(ctx, []byte("k"), []byte("v")); err == nil {
+		t.Fatal("expected publish to a dead broker to fail")
+	}
+}
+
+func TestPublish_ContextAlreadyCancelled_ReturnsError(t *testing.T) {
 	p := NewProducer([]string{"127.0.0.1:1"}, "test.topic")
 	defer p.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := p.Publish(ctx, []byte("k"), []byte("v"))
-	if err == nil {
-		t.Fatal("expected an error publishing to a dead broker with cancelled context")
+	if err := p.Publish(ctx, []byte("k"), []byte("v")); err == nil {
+		t.Fatal("expected an error publishing with a cancelled context to a dead broker")
 	}
 }
 
-func TestPublish_DeadBroker_ExhaustsRetries(t *testing.T) {
-	p := NewProducer([]string{"127.0.0.1:1"}, "test.topic")
-	defer p.Close()
+// ---- Consumer.Start ---------------------------------------------------------
 
-	// A short deadline keeps the test fast while still exercising the retry loop.
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-
-	err := p.Publish(ctx, []byte("k"), []byte("v"))
-	if err == nil {
-		t.Fatal("expected publish to a dead broker to fail")
-	}
-}
-
-// ---- Consumer.Start / consumeLoop -------------------------------------------
-
-func TestStart_ContextCancelled_ReturnsPromptly(t *testing.T) {
+func TestStart_DeadBroker_ReturnsError(t *testing.T) {
+	// Creating the consumer group against a dead broker fails, so Start returns
+	// promptly with a non-nil error instead of blocking.
 	c := NewConsumer([]string{"127.0.0.1:1"}, "test.topic", "test-group", func(_, _ []byte) error { return nil })
 	defer c.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancelled before Start runs
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	done := make(chan error, 1)
 	go func() { done <- c.Start(ctx) }()
@@ -52,25 +52,9 @@ func TestStart_ContextCancelled_ReturnsPromptly(t *testing.T) {
 	select {
 	case err := <-done:
 		if err == nil {
-			t.Error("expected Start to return ctx error on cancelled context")
+			t.Error("expected an error from Start against a dead broker")
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Start did not return promptly after context cancellation")
-	}
-}
-
-func TestConsumeLoop_ContextCancelled_ReturnsCtxErr(t *testing.T) {
-	c := NewConsumer([]string{"127.0.0.1:1"}, "test.topic", "test-group", func(_, _ []byte) error { return nil })
-	defer c.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	hadSuccess, err := c.consumeLoop(ctx)
-	if err == nil {
-		t.Error("expected consumeLoop to return ctx error")
-	}
-	if hadSuccess {
-		t.Error("expected hadSuccess=false when context is cancelled before any read")
+	case <-time.After(20 * time.Second):
+		t.Fatal("Start did not return within the deadline")
 	}
 }

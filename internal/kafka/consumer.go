@@ -2,177 +2,86 @@ package kafka
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"time"
 
-	"github.com/segmentio/kafka-go"
-
-	"github.com/trogers1052/context-service/internal/metrics"
+	"github.com/IBM/sarama"
+	commonskafka "github.com/trogers1052/trading-go-commons/kafka"
 )
 
-const (
-	maxReconnectAttempts = 5
-	baseReconnectDelay   = 2 * time.Second
-	maxReconnectDelay    = 60 * time.Second
-	// consecutiveErrorThreshold is the number of read errors in a row before
-	// the consumer tears down the reader and reconnects.
-	consecutiveErrorThreshold = 5
-)
-
-// MessageHandler is called for each consumed message
+// MessageHandler is called for each consumed message.
 type MessageHandler func(key, value []byte) error
 
-// Consumer consumes messages from a Kafka topic
+// Consumer consumes messages from a Kafka topic using the shared, sarama-based
+// consumer-group runner from trading-go-commons. It preserves the previous
+// behaviour:
+//   - same consumer group ID and topic (passed through from config),
+//   - the same initial-offset semantics: only NEW messages are read on a fresh
+//     group (kafka-go's StartOffset: LastOffset -> sarama.OffsetNewest),
+//   - commit-after-success handling (the shared runner marks a message once the
+//     handler returns; on handler error it logs and continues, matching the old
+//     reader's "don't block the consumer" behaviour),
+//   - automatic reconnect on session/rebalance errors and graceful shutdown on
+//     context cancellation (owned by the shared ConsumerGroup.Run).
 type Consumer struct {
-	reader  *kafka.Reader
+	brokers []string
+	topic   string
+	groupID string
 	handler MessageHandler
-	config  kafka.ReaderConfig
+
+	// cg is the shared consumer-group runner. It is created lazily in Start so
+	// that constructing a Consumer never requires a live broker (preserving the
+	// old kafka-go constructor's lazy-dial behaviour and the existing tests that
+	// build a Consumer against a dead broker without error).
+	cg *commonskafka.ConsumerGroup
 }
 
-// NewConsumer creates a new Kafka consumer
+// NewConsumer creates a new Kafka consumer. It does not dial the broker; the
+// underlying consumer group is created when Start is called.
 func NewConsumer(brokers []string, topic, groupID string, handler MessageHandler) *Consumer {
-	cfg := kafka.ReaderConfig{
-		Brokers:     brokers,
-		Topic:       topic,
-		GroupID:     groupID,
-		MinBytes:    1,
-		MaxBytes:    10e6, // 10MB
-		MaxWait:     500 * time.Millisecond,
-		StartOffset: kafka.LastOffset,
-		Dialer: &kafka.Dialer{
-			Timeout:   10 * time.Second,
-			DualStack: true,
-		},
-	}
-
 	return &Consumer{
-		reader:  kafka.NewReader(cfg),
+		brokers: brokers,
+		topic:   topic,
+		groupID: groupID,
 		handler: handler,
-		config:  cfg,
 	}
 }
 
-// newReader creates a fresh kafka.Reader from the stored config.
-func (c *Consumer) newReader() *kafka.Reader {
-	return kafka.NewReader(c.config)
-}
-
-// Start begins consuming messages. If the reader encounters too many
-// consecutive errors it will close the current reader, wait with
-// exponential backoff, create a new reader, and resume consuming.
-// After maxReconnectAttempts consecutive reconnection failures it
-// returns an error. A single successful read resets the retry counter.
+// Start begins consuming messages and blocks until ctx is cancelled, then shuts
+// down gracefully and returns. Session/rebalance errors are handled internally
+// by the shared runner (logged + reconnect with backoff). It returns an error
+// only if the consumer group cannot be created.
+//
+// The handler is adapted from the shared *kafka.Message into the existing
+// (key, value) MessageHandler so the service's handleMessage logic is reused
+// byte-for-byte.
 func (c *Consumer) Start(ctx context.Context) error {
-	log.Printf("Starting Kafka consumer for topic: %s", c.config.Topic)
+	log.Printf("Starting Kafka consumer for topic: %s", c.topic)
 
-	reconnectAttempts := 0
-	reconnectDelay := baseReconnectDelay
-
-	for {
-		hadSuccess, err := c.consumeLoop(ctx)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		// If the loop successfully read at least one message before failing,
-		// the connection was alive at some point — reset the retry state so
-		// transient blips don't accumulate toward the hard limit.
-		if hadSuccess {
-			reconnectAttempts = 0
-			reconnectDelay = baseReconnectDelay
-		}
-
-		// consumeLoop only returns when ctx is cancelled or after hitting
-		// consecutiveErrorThreshold errors in a row.
-		reconnectAttempts++
-		if reconnectAttempts > maxReconnectAttempts {
-			return fmt.Errorf("kafka consumer giving up after %d reconnect attempts: %w",
-				maxReconnectAttempts, err)
-		}
-
-		log.Printf("Kafka consumer disconnected (attempt %d/%d): %v — reconnecting in %v",
-			reconnectAttempts, maxReconnectAttempts, err, reconnectDelay)
-
-		// Close the old reader (best-effort).
-		if closeErr := c.reader.Close(); closeErr != nil {
-			log.Printf("Warning: error closing old Kafka reader: %v", closeErr)
-		}
-
-		// Wait before reconnecting.
-		select {
-		case <-time.After(reconnectDelay):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-
-		// Exponential backoff for the next attempt.
-		reconnectDelay *= 2
-		if reconnectDelay > maxReconnectDelay {
-			reconnectDelay = maxReconnectDelay
-		}
-
-		// Create a fresh reader.
-		c.reader = c.newReader()
-		metrics.KafkaReconnects.Inc()
-		log.Printf("Created new Kafka reader for topic: %s", c.config.Topic)
+	cg, err := commonskafka.NewConsumerGroup(
+		c.brokers,
+		c.groupID,
+		[]string{c.topic},
+		func(_ context.Context, msg *commonskafka.Message) error {
+			return c.handler(msg.Key, msg.Value)
+		},
+		// Preserve the previous StartOffset: kafka.LastOffset semantics — a fresh
+		// consumer group reads only NEW messages, not the historical backlog.
+		commonskafka.WithInitialOffset(sarama.OffsetNewest),
+		commonskafka.WithConsumerClientID("context-service"),
+	)
+	if err != nil {
+		return err
 	}
+	c.cg = cg
+
+	return c.cg.Run(ctx)
 }
 
-// consumeLoop reads messages until the context is cancelled or
-// consecutiveErrorThreshold read errors occur in a row. It returns
-// whether at least one message was successfully read (hadSuccess)
-// so the caller can decide whether to reset the reconnect counter.
-func (c *Consumer) consumeLoop(ctx context.Context) (hadSuccess bool, err error) {
-	consecutiveErrors := 0
-	var lastErr error
-
-	for {
-		select {
-		case <-ctx.Done():
-			return hadSuccess, ctx.Err()
-		default:
-			msg, readErr := c.reader.FetchMessage(ctx)
-			if readErr != nil {
-				if ctx.Err() != nil {
-					return hadSuccess, ctx.Err()
-				}
-				consecutiveErrors++
-				lastErr = readErr
-				log.Printf("Error reading message (%d/%d): %v",
-					consecutiveErrors, consecutiveErrorThreshold, readErr)
-
-				if consecutiveErrors >= consecutiveErrorThreshold {
-					return hadSuccess, lastErr
-				}
-
-				// Brief pause before retrying within the same reader.
-				select {
-				case <-time.After(time.Second):
-				case <-ctx.Done():
-					return hadSuccess, ctx.Err()
-				}
-				continue
-			}
-
-			// Successful read — reset error counter and mark success.
-			consecutiveErrors = 0
-			hadSuccess = true
-
-			if handleErr := c.handler(msg.Key, msg.Value); handleErr != nil {
-				log.Printf("Error handling message: %v", handleErr)
-				// Don't commit — message will be redelivered on restart
-				continue
-			}
-
-			if commitErr := c.reader.CommitMessages(ctx, msg); commitErr != nil {
-				log.Printf("Error committing offset: %v", commitErr)
-			}
-		}
-	}
-}
-
-// Close closes the consumer
+// Close releases the underlying consumer group. It is safe to call before Start
+// (no-op) and after a graceful Run shutdown.
 func (c *Consumer) Close() error {
-	return c.reader.Close()
+	if c.cg == nil {
+		return nil
+	}
+	return c.cg.Close()
 }
