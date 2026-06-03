@@ -2,8 +2,9 @@ package config
 
 import (
 	"os"
-	"strconv"
 	"strings"
+
+	"github.com/trogers1052/trading-go-commons/env"
 )
 
 // Config holds all configuration for the context service
@@ -36,15 +37,15 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		KafkaBrokers:  getEnvSlice("KAFKA_BROKERS", []string{"localhost:9092"}),
-		InputTopic:    getEnv("KAFKA_INPUT_TOPIC", "stock.indicators"),
-		OutputTopic:   getEnv("KAFKA_OUTPUT_TOPIC", "market.context"),
-		ConsumerGroup: getEnv("KAFKA_CONSUMER_GROUP", "context-service"),
+		InputTopic:    env.String("KAFKA_INPUT_TOPIC", "stock.indicators"),
+		OutputTopic:   env.String("KAFKA_OUTPUT_TOPIC", "market.context"),
+		ConsumerGroup: env.String("KAFKA_CONSUMER_GROUP", "context-service"),
 
-		RedisHost:     getEnv("REDIS_HOST", "localhost"),
-		RedisPort:     getEnvInt("REDIS_PORT", 6379),
-		RedisPassword: getEnv("REDIS_PASSWORD", ""),
-		RedisDB:       getEnvInt("REDIS_DB", 0),
-		ContextKey:    getEnv("REDIS_CONTEXT_KEY", "market:context"),
+		RedisHost:     env.String("REDIS_HOST", "localhost"),
+		RedisPort:     env.Int("REDIS_PORT", 6379),
+		RedisPassword: env.String("REDIS_PASSWORD", ""),
+		RedisDB:       env.Int("REDIS_DB", 0),
+		ContextKey:    env.String("REDIS_CONTEXT_KEY", "market:context"),
 
 		RegimeSymbols: getEnvSlice("REGIME_SYMBOLS", []string{"SPY", "QQQ"}),
 		SectorSymbols: getEnvSlice("SECTOR_SYMBOLS", []string{
@@ -52,28 +53,17 @@ func Load() *Config {
 			"XLB", "GDX", "GLD", "XME", "URA", "SIL", "REMX",
 		}),
 
-		FREDAPIKey: getEnv("FRED_API_KEY", ""),
+		FREDAPIKey: env.String("FRED_API_KEY", ""),
 
-		LogLevel: getEnv("LOG_LEVEL", "info"),
+		LogLevel: env.String("LOG_LEVEL", "info"),
 	}
 }
 
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-func getEnvInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intVal, err := strconv.Atoi(value); err == nil {
-			return intVal
-		}
-	}
-	return defaultValue
-}
-
+// getEnvSlice splits a comma-separated environment variable into a slice,
+// returning defaultValue when the variable is unset or empty. It preserves the
+// service's original raw-split semantics (no per-element trimming or empty
+// dropping), which differs from env.StringSlice; callers rely on this exact
+// behavior for symbol/broker lists.
 func getEnvSlice(key string, defaultValue []string) []string {
 	if value := os.Getenv(key); value != "" {
 		return strings.Split(value, ",")

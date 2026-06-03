@@ -4,18 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
-	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/trogers1052/trading-go-commons/redisx"
 )
 
-const (
-	maxRetries     = 3
-	baseRetryDelay = 500 * time.Millisecond
-	maxRetryDelay  = 5 * time.Second
-)
+// maxAttempts is the total number of tries (initial + retries) for a Redis
+// operation that fails with a connection-level error.
+const maxAttempts = 4
 
 // Client wraps the Redis client for context storage
 type Client struct {
@@ -25,14 +22,10 @@ type Client struct {
 
 // NewClient creates a new Redis client
 func NewClient(host string, port int, password string, db int, contextKey string) *Client {
-	client := redis.NewClient(&redis.Options{
-		Addr:         fmt.Sprintf("%s:%d", host, port),
-		Password:     password,
-		DB:           db,
-		DialTimeout:  5 * time.Second,
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-		PoolSize:     5,
+	client := redisx.NewClient(redisx.Options{
+		Addr:     fmt.Sprintf("%s:%d", host, port),
+		Password: password,
+		DB:       db,
 	})
 
 	return &Client{
@@ -51,90 +44,12 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
-// isConnectionError checks if an error is a Redis connection-level error
-// that warrants a retry (as opposed to a logic error like WRONGTYPE).
-func isConnectionError(err error) bool {
-	if err == nil {
-		return false
-	}
-	// Network-level errors (dial timeout, connection refused, broken pipe, etc.)
-	if _, ok := err.(net.Error); ok {
-		return true
-	}
-	// go-redis surfaces connection pool exhaustion and closed connections as
-	// specific error strings; check for common patterns.
-	s := err.Error()
-	for _, sub := range []string{
-		"connection refused",
-		"connection reset",
-		"broken pipe",
-		"i/o timeout",
-		"EOF",
-		"use of closed network connection",
-	} {
-		if strings.Contains(s, sub) {
-			return true
-		}
-	}
-	return false
-}
-
-// retryOnConnectionError runs fn up to maxRetries times when fn returns a
-// connection error. It uses exponential backoff capped at maxRetryDelay and
-// respects context cancellation.
-func (c *Client) retryOnConnectionError(ctx context.Context, operation string, fn func() error) error {
-	var err error
-	delay := baseRetryDelay
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		err = fn()
-		if err == nil {
-			return nil
-		}
-
-		if !isConnectionError(err) {
-			// Logic error — retrying won't help.
-			return err
-		}
-
-		if attempt == maxRetries {
-			break
-		}
-
-		log.Printf("Redis %s failed (attempt %d/%d): %v — retrying in %v",
-			operation, attempt+1, maxRetries+1, err, delay)
-
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-
-		// Exponential backoff
-		delay *= 2
-		if delay > maxRetryDelay {
-			delay = maxRetryDelay
-		}
-
-		// Attempt a ping to verify the connection is back before retrying the
-		// real operation. If the ping fails we still continue to the next
-		// attempt — the pool may recover on its own.
-		if pingErr := c.client.Ping(ctx).Err(); pingErr != nil {
-			log.Printf("Redis reconnect ping failed: %v", pingErr)
-		} else {
-			log.Printf("Redis reconnected successfully")
-		}
-	}
-
-	return fmt.Errorf("redis %s failed after %d retries: %w", operation, maxRetries+1, err)
-}
-
 // PublishContext stores the market context in Redis
 func (c *Client) PublishContext(ctx context.Context, contextJSON []byte) error {
 	// Store the context with a TTL (in case service stops updating)
-	err := c.retryOnConnectionError(ctx, "SET", func() error {
+	err := redisx.RetryOnConnectionError(ctx, func() error {
 		return c.client.Set(ctx, c.contextKey, contextJSON, 5*time.Minute).Err()
-	})
+	}, maxAttempts)
 	if err != nil {
 		return fmt.Errorf("failed to publish context to Redis: %w", err)
 	}
@@ -152,7 +67,7 @@ func (c *Client) PublishContext(ctx context.Context, contextJSON []byte) error {
 // GetContext retrieves the current market context from Redis
 func (c *Client) GetContext(ctx context.Context) ([]byte, error) {
 	var result []byte
-	err := c.retryOnConnectionError(ctx, "GET", func() error {
+	err := redisx.RetryOnConnectionError(ctx, func() error {
 		val, getErr := c.client.Get(ctx, c.contextKey).Bytes()
 		if getErr == redis.Nil {
 			result = nil
@@ -163,7 +78,7 @@ func (c *Client) GetContext(ctx context.Context) ([]byte, error) {
 		}
 		result = val
 		return nil
-	})
+	}, maxAttempts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get context from Redis: %w", err)
 	}

@@ -3,11 +3,9 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
+
+	"github.com/trogers1052/trading-go-commons/env"
+	"github.com/trogers1052/trading-go-commons/httpserver"
 
 	"github.com/trogers1052/context-service/internal/config"
 	"github.com/trogers1052/context-service/internal/service"
@@ -17,23 +15,11 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	// Start health endpoint
-	healthPort := os.Getenv("HEALTH_PORT")
-	if healthPort == "" {
-		healthPort = "8080"
-	}
-	healthMux := http.NewServeMux()
-	healthMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
-	healthServer := &http.Server{
-		Addr:         ":" + healthPort,
-		Handler:      healthMux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 5 * time.Second,
-	}
+	healthPort := env.String("HEALTH_PORT", "8080")
+	healthServer := httpserver.NewHealthServer(":" + healthPort)
+	healthErrCh := healthServer.Start()
 	go func() {
-		if err := healthServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := <-healthErrCh; err != nil {
 			log.Printf("Health server error: %v", err)
 		}
 	}()
@@ -48,18 +34,18 @@ func main() {
 	// Create service
 	svc := service.NewContextService(cfg)
 
-	// Create context with cancellation
-	ctx, cancel := context.WithCancel(context.Background())
+	// Context cancelled on SIGINT/SIGTERM.
+	signalCtx, stop := httpserver.SignalContext()
+	defer stop()
+
+	// Derive a cancellable context so a service error can also trigger shutdown.
+	ctx, cancel := context.WithCancel(signalCtx)
 	defer cancel()
 
 	// Initialize service
 	if err := svc.Initialize(ctx); err != nil {
 		log.Fatalf("Failed to initialize service: %v", err)
 	}
-
-	// Handle shutdown signals
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// Start service in goroutine
 	go func() {
@@ -69,14 +55,14 @@ func main() {
 		}
 	}()
 
-	// Wait for shutdown signal
-	sig := <-sigChan
-	log.Printf("Received signal: %v", sig)
+	// Wait for shutdown signal (or service error).
+	<-ctx.Done()
+	log.Printf("Shutting down")
 
-	// Graceful shutdown
+	// Graceful shutdown (httpserver applies a 5s default timeout).
 	cancel()
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-	healthServer.Shutdown(shutdownCtx)
+	if err := healthServer.Shutdown(context.Background()); err != nil {
+		log.Printf("Health server shutdown error: %v", err)
+	}
 	svc.Stop()
 }
