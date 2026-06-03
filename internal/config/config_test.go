@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"testing"
+
+	"github.com/trogers1052/trading-go-commons/env"
 )
 
 // ---- Load defaults ----------------------------------------------------------
@@ -229,41 +231,41 @@ func TestLoad_EnvOverride_LogLevel(t *testing.T) {
 	}
 }
 
-// ---- getEnvSlice ------------------------------------------------------------
+// ---- env.StringSliceRaw (raw comma-split for broker/symbol lists) -----------
 
-func TestGetEnvSlice_ReturnsDefault_WhenNotSet(t *testing.T) {
+func TestStringSliceRaw_ReturnsDefault_WhenNotSet(t *testing.T) {
 	os.Unsetenv("TEST_GETENVSLICE_MISSING")
-	got := getEnvSlice("TEST_GETENVSLICE_MISSING", []string{"a", "b"})
+	got := env.StringSliceRaw("TEST_GETENVSLICE_MISSING", []string{"a", "b"}, ",")
 	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
 		t.Errorf("got %v, want [a b]", got)
 	}
 }
 
-func TestGetEnvSlice_SingleValue(t *testing.T) {
+func TestStringSliceRaw_SingleValue(t *testing.T) {
 	os.Setenv("TEST_GETENVSLICE_ONE", "x")
 	defer os.Unsetenv("TEST_GETENVSLICE_ONE")
 
-	got := getEnvSlice("TEST_GETENVSLICE_ONE", []string{"default"})
+	got := env.StringSliceRaw("TEST_GETENVSLICE_ONE", []string{"default"}, ",")
 	if len(got) != 1 || got[0] != "x" {
 		t.Errorf("got %v, want [x]", got)
 	}
 }
 
-func TestGetEnvSlice_MultipleValues(t *testing.T) {
+func TestStringSliceRaw_MultipleValues(t *testing.T) {
 	os.Setenv("TEST_GETENVSLICE_MULTI", "x,y,z")
 	defer os.Unsetenv("TEST_GETENVSLICE_MULTI")
 
-	got := getEnvSlice("TEST_GETENVSLICE_MULTI", nil)
+	got := env.StringSliceRaw("TEST_GETENVSLICE_MULTI", nil, ",")
 	if len(got) != 3 || got[0] != "x" || got[1] != "y" || got[2] != "z" {
 		t.Errorf("got %v, want [x y z]", got)
 	}
 }
 
-func TestGetEnvSlice_EmptyString_ReturnsDefault(t *testing.T) {
+func TestStringSliceRaw_EmptyString_ReturnsDefault(t *testing.T) {
 	os.Setenv("TEST_GETENVSLICE_EMPTY", "")
 	defer os.Unsetenv("TEST_GETENVSLICE_EMPTY")
 
-	got := getEnvSlice("TEST_GETENVSLICE_EMPTY", []string{"a"})
+	got := env.StringSliceRaw("TEST_GETENVSLICE_EMPTY", []string{"a"}, ",")
 	if len(got) != 1 || got[0] != "a" {
 		t.Errorf("got %v, want [a] (empty string uses default)", got)
 	}
