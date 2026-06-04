@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/alicebob/miniredis/v2"
 	commonskafka "github.com/trogers1052/trading-go-commons/kafka"
 	testkit "github.com/trogers1052/trading-testkit"
@@ -17,7 +16,7 @@ import (
 )
 
 // TestIntegration_RealBroker_ConsumeProduceRoundTrip exercises the migrated,
-// sarama-based kafka.Consumer + kafka.Producer wrappers against a REAL broker
+// kafka-go-based kafka.Consumer + kafka.Producer wrappers against a REAL broker
 // (Redpanda via testkit). It drives the full service path:
 //
 //	input topic -> service.Consumer -> handleMessage -> regime detector ->
@@ -77,7 +76,7 @@ func TestIntegration_RealBroker_ConsumeProduceRoundTrip(t *testing.T) {
 	}
 	verifyCG, err := commonskafka.NewConsumerGroup(
 		[]string{rp.Brokers}, "verify-output", []string{outputTopic}, verifyHandler,
-		commonskafka.WithInitialOffset(sarama.OffsetOldest),
+		commonskafka.WithInitialOffset(commonskafka.OffsetOldest),
 	)
 	if err != nil {
 		t.Fatalf("verify NewConsumerGroup: %v", err)

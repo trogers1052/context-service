@@ -8,16 +8,15 @@ import (
 	commonskafka "github.com/trogers1052/trading-go-commons/kafka"
 )
 
-// Producer publishes messages to a Kafka topic using the shared, sarama-based
+// Producer publishes messages to a Kafka topic using the shared, kafka-go-based
 // durable Producer from trading-go-commons.
 //
-// Behaviour preserved from the previous kafka-go implementation:
+// Behaviour preserved across the migration:
 //   - same output topic (passed through from config),
 //   - same key/value bytes for each publish,
 //   - durable acks with bounded retry/backoff. The shared producer waits for all
-//     in-sync replicas (sarama.WaitForAll) by default — at least as durable as
-//     the previous RequireOne — and retries on transient failures, so market
-//     context updates aren't silently lost.
+//     in-sync replicas (commonskafka.RequireAll) and retries on transient
+//     failures, so market context updates aren't silently lost.
 type Producer struct {
 	brokers []string
 	topic   string
@@ -50,6 +49,10 @@ func (p *Producer) producer() (*commonskafka.Producer, error) {
 
 	prod, err := commonskafka.NewProducer(
 		p.brokers,
+		// Durable acks: wait for the full in-sync replica set (same durability as
+		// the previous WaitForAll default). Stated explicitly so it survives any
+		// future change to the shared producer's default.
+		commonskafka.WithRequiredAcks(commonskafka.RequireAll),
 		commonskafka.WithClientID("context-service"),
 	)
 	if err != nil {
