@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+
 	"github.com/trogers1052/trading-go-commons/env"
 )
 
@@ -25,6 +27,11 @@ type Config struct {
 
 	// Macro enrichment (optional)
 	FREDAPIKey string // FRED API key for VIX + HY spread fetching; empty disables macro signals
+
+	// Capital-temperature history (optional). Empty TimescaleDSN disables it —
+	// the service still runs and publishes, just without banked history or
+	// temperature derivatives.
+	TimescaleDSN string
 
 	// Service configuration
 	LogLevel string
@@ -52,6 +59,27 @@ func Load() *Config {
 
 		FREDAPIKey: env.String("FRED_API_KEY", ""),
 
+		TimescaleDSN: buildTimescaleDSN(),
+
 		LogLevel: env.String("LOG_LEVEL", "info"),
 	}
+}
+
+// buildTimescaleDSN assembles a pgx keyword/value DSN from TIMESCALE_* env vars.
+// Returns "" when TIMESCALE_HOST is unset, which disables history (opt-in).
+// Keyword/value form avoids URL-encoding issues with special characters in the
+// password.
+func buildTimescaleDSN() string {
+	host := env.String("TIMESCALE_HOST", "")
+	if host == "" {
+		return ""
+	}
+	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		host,
+		env.Int("TIMESCALE_PORT", 5433),
+		env.String("TIMESCALE_USER", "ingestor"),
+		env.String("TIMESCALE_PASSWORD", ""),
+		env.String("TIMESCALE_DB", "stock_db"),
+		env.String("TIMESCALE_SSLMODE", "disable"),
+	)
 }
