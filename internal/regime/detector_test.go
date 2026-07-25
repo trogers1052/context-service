@@ -482,3 +482,121 @@ func TestDetector_ConcurrentReadWrite_NoRace(t *testing.T) {
 
 	<-done
 }
+
+// ---- SP500Trend (C8) ------------------------------------------------------
+
+func TestGetMarketContext_SP500Trend_GoldenAboveBoth(t *testing.T) {
+	d := regime.NewDetector([]string{"SPY"}, nil)
+	d.UpdateIndicators(&regime.Indicators{Symbol: "SPY", Close: 550, SMA50: 540, SMA200: 500, RSI14: 60, MACD: 2, MACDSignal: 1})
+
+	tr := d.GetMarketContext().SP500Trend
+	if tr == nil {
+		t.Fatal("SP500Trend should be present when SPY data is available")
+	}
+	if !tr.Above200 || !tr.Above50 {
+		t.Errorf("expected above both MAs: above200=%v above50=%v", tr.Above200, tr.Above50)
+	}
+	if tr.CrossState != regime.CrossGolden {
+		t.Errorf("CrossState: got %s, want GOLDEN (SMA50 540 > SMA200 500)", tr.CrossState)
+	}
+	if math.Abs(tr.VsSMA200-10.0) > 1e-9 { // (550-500)/500*100
+		t.Errorf("VsSMA200: got %.4f, want 10.0", tr.VsSMA200)
+	}
+}
+
+func TestGetMarketContext_SP500Trend_DeathBelow200(t *testing.T) {
+	d := regime.NewDetector([]string{"SPY"}, nil)
+	d.UpdateIndicators(&regime.Indicators{Symbol: "SPY", Close: 480, SMA50: 490, SMA200: 500, RSI14: 40, MACD: 1, MACDSignal: 2})
+
+	tr := d.GetMarketContext().SP500Trend
+	if tr == nil {
+		t.Fatal("SP500Trend should be present")
+	}
+	if tr.Above200 {
+		t.Error("Above200 should be false when close < SMA200")
+	}
+	if tr.CrossState != regime.CrossDeath {
+		t.Errorf("CrossState: got %s, want DEATH (SMA50 490 < SMA200 500)", tr.CrossState)
+	}
+}
+
+func TestGetMarketContext_SP500Trend_NilWhenNoSPY(t *testing.T) {
+	d := regime.NewDetector([]string{"SPY"}, []string{"XLK"})
+	d.UpdateIndicators(&regime.Indicators{Symbol: "XLK", Close: 200, SMA50: 195, SMA200: 180})
+
+	if tr := d.GetMarketContext().SP500Trend; tr != nil {
+		t.Errorf("SP500Trend should be nil when SPY data missing, got %+v", tr)
+	}
+}
+
+func TestGetMarketContext_SP500Trend_NeutralWhenNoSMA50(t *testing.T) {
+	d := regime.NewDetector([]string{"SPY"}, nil)
+	d.UpdateIndicators(&regime.Indicators{Symbol: "SPY", Close: 550, SMA50: 0, SMA200: 500, RSI14: 60})
+
+	tr := d.GetMarketContext().SP500Trend
+	if tr == nil {
+		t.Fatal("SP500Trend should be present with SMA200 available")
+	}
+	if tr.CrossState != regime.CrossNeutral {
+		t.Errorf("CrossState: got %s, want NEUTRAL when SMA50 unavailable", tr.CrossState)
+	}
+	if tr.Above50 {
+		t.Error("Above50 should be false when SMA50 unavailable")
+	}
+}
+
+// ---- Breadth (C9) ---------------------------------------------------------
+
+func TestGetMarketContext_Breadth_PctAboveMAs(t *testing.T) {
+	d := regime.NewDetector([]string{"SPY"}, []string{"XLK", "XLF", "XLE", "XLV"})
+	// Universe = SPY + 4 sectors = 5.
+	d.UpdateIndicators(&regime.Indicators{Symbol: "SPY", Close: 550, SMA50: 540, SMA200: 500}) // above both
+	d.UpdateIndicators(&regime.Indicators{Symbol: "XLK", Close: 200, SMA50: 195, SMA200: 180}) // above both
+	d.UpdateIndicators(&regime.Indicators{Symbol: "XLF", Close: 40, SMA50: 39, SMA200: 42})    // below 200, above 50
+	d.UpdateIndicators(&regime.Indicators{Symbol: "XLE", Close: 90, SMA50: 88, SMA200: 85})    // above both
+	d.UpdateIndicators(&regime.Indicators{Symbol: "XLV", Close: 130, SMA50: 0, SMA200: 0})     // invalid, skipped
+
+	b := d.GetMarketContext().Breadth
+	if b == nil {
+		t.Fatal("Breadth should be present")
+	}
+	// valid200 = SPY,XLK,XLF,XLE = 4; above200 = SPY,XLK,XLE = 3 → 75%
+	if b.Count != 4 {
+		t.Errorf("Count: got %d, want 4 valid-200 symbols", b.Count)
+	}
+	if b.Universe != 5 {
+		t.Errorf("Universe: got %d, want 5", b.Universe)
+	}
+	if math.Abs(b.PctAbove200-75.0) > 1e-9 {
+		t.Errorf("PctAbove200: got %.2f, want 75.00", b.PctAbove200)
+	}
+	// valid50 = 4; all four above their SMA50 → 100%
+	if math.Abs(b.PctAbove50-100.0) > 1e-9 {
+		t.Errorf("PctAbove50: got %.2f, want 100.00", b.PctAbove50)
+	}
+}
+
+func TestGetMarketContext_Breadth_NilWhenNoValidData(t *testing.T) {
+	d := regime.NewDetector([]string{"SPY"}, []string{"XLK"})
+	d.UpdateIndicators(&regime.Indicators{Symbol: "SPY", Close: 550, SMA50: 0, SMA200: 0})
+	d.UpdateIndicators(&regime.Indicators{Symbol: "XLK", Close: 200, SMA50: 0, SMA200: 0})
+
+	if b := d.GetMarketContext().Breadth; b != nil {
+		t.Errorf("Breadth should be nil when no symbol has valid MA data, got %+v", b)
+	}
+}
+
+func TestGetMarketContext_Breadth_DedupesRegimeAndSector(t *testing.T) {
+	// SPY appears in both regime and sector lists — must be counted once.
+	d := regime.NewDetector([]string{"SPY"}, []string{"SPY", "XLK"})
+	d.UpdateIndicators(&regime.Indicators{Symbol: "SPY", Close: 550, SMA50: 540, SMA200: 500})
+	d.UpdateIndicators(&regime.Indicators{Symbol: "XLK", Close: 200, SMA50: 195, SMA200: 180})
+
+	b := d.GetMarketContext().Breadth
+	if b == nil {
+		t.Fatal("Breadth should be present")
+	}
+	if b.Universe != 2 {
+		t.Errorf("Universe: got %d, want 2 (SPY de-duplicated)", b.Universe)
+	}
+}
