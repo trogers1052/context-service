@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/trogers1052/context-service/internal/macro"
+	"github.com/trogers1052/context-service/internal/sentiment"
 )
 
 // Regime represents the market regime classification
@@ -58,6 +59,7 @@ type MarketContext struct {
 	SP500Trend         *SP500Trend         `json:"sp500_trend,omitempty"`
 	Breadth            *Breadth            `json:"breadth,omitempty"`
 	CapitalTemperature *CapitalTemperature `json:"capital_temperature,omitempty"`
+	Sentiment          *sentiment.Signals  `json:"sentiment,omitempty"`
 	MacroSignals       *macro.MacroSignals `json:"macro_signals,omitempty"`
 	Timestamp          time.Time           `json:"timestamp"`
 	UpdatedAt          time.Time           `json:"updated_at"`

@@ -14,6 +14,7 @@ import (
 	"github.com/trogers1052/context-service/internal/metrics"
 	"github.com/trogers1052/context-service/internal/redis"
 	"github.com/trogers1052/context-service/internal/regime"
+	"github.com/trogers1052/context-service/internal/sentiment"
 )
 
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
@@ -88,6 +89,10 @@ type ContextService struct {
 	// macroFetcher polls FRED for VIX and HY spreads (nil when not configured).
 	macroFetcher *macro.Fetcher
 
+	// sentimentFetcher provides market-sentiment gauges. Currently a stub that
+	// reports unavailable until a real source (CNN Fear & Greed) is wired.
+	sentimentFetcher sentiment.Fetcher
+
 	// Track which symbols we care about
 	trackedSymbols map[string]bool
 
@@ -122,10 +127,11 @@ func NewContextService(cfg *config.Config) *ContextService {
 	}
 
 	return &ContextService{
-		config:          cfg,
-		detector:        regime.NewDetector(cfg.RegimeSymbols, cfg.SectorSymbols),
-		trackedSymbols:  tracked,
-		publishInterval: 30 * time.Second, // Publish at most every 30 seconds
+		config:           cfg,
+		detector:         regime.NewDetector(cfg.RegimeSymbols, cfg.SectorSymbols),
+		trackedSymbols:   tracked,
+		sentimentFetcher: sentiment.NewStubFetcher(),
+		publishInterval:  30 * time.Second, // Publish at most every 30 seconds
 	}
 }
 
@@ -260,6 +266,14 @@ func (s *ContextService) maybePublishContext() {
 	// This may adjust the regime — e.g. VIX > 35 overrides BULL → BEAR.
 	if s.macroFetcher != nil {
 		regime.ApplyMacroAdjustments(marketCtx, s.macroFetcher.Get())
+	}
+
+	// Sentiment is stubbed until a real source is wired; the stub reports
+	// unavailable, so marketCtx.Sentiment stays nil (omitted from the payload).
+	if s.sentimentFetcher != nil {
+		if sig, err := s.sentimentFetcher.Fetch(); err == nil && sig.Available {
+			marketCtx.Sentiment = &sig
+		}
 	}
 
 	// Synthesise the 0..1 capital-temperature gauge from all available signals

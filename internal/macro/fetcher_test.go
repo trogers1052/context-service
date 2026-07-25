@@ -374,6 +374,27 @@ func TestClassifyCurve(t *testing.T) {
 	}
 }
 
+// ---- ClassifyTermStructure -------------------------------------------------
+
+func TestClassifyTermStructure(t *testing.T) {
+	cases := []struct {
+		ratio float64
+		want  string
+	}{
+		{1.20, macro.TermBackwardation},
+		{1.00, macro.TermBackwardation},
+		{0.98, macro.TermFlat},
+		{0.96, macro.TermFlat},
+		{0.95, macro.TermContango},
+		{0.90, macro.TermContango},
+	}
+	for _, c := range cases {
+		if got := macro.ClassifyTermStructure(c.ratio); got != c.want {
+			t.Errorf("ClassifyTermStructure(%.2f): got %s, want %s", c.ratio, got, c.want)
+		}
+	}
+}
+
 // ---- Optional (peripheral) macro series ------------------------------------
 
 // newFullFREDServer serves any series present in vals and 400s the rest, so a
@@ -398,6 +419,7 @@ func TestFetcher_Refresh_OptionalSeries_Parsed(t *testing.T) {
 		"DTWEXBGS":     "121.50",
 		"ICSA4WSA":     "232000",
 		"SAHMREALTIME": "0.60",
+		"VXVCLS":       "14.00",
 	})
 	defer srv.Close()
 
@@ -408,6 +430,12 @@ func TestFetcher_Refresh_OptionalSeries_Parsed(t *testing.T) {
 	s := f.Get()
 	if s.CurveState != macro.CurveInverted {
 		t.Errorf("CurveState: got %s, want INVERTED for 10Y2Y=-0.30", s.CurveState)
+	}
+	if s.VIX3M != 14.0 {
+		t.Errorf("VIX3M: got %.2f, want 14.00", s.VIX3M)
+	}
+	if s.TermStructureState != macro.TermBackwardation {
+		t.Errorf("TermStructureState: got %s, want BACKWARDATION (VIX 18 / VIX3M 14)", s.TermStructureState)
 	}
 	if s.TenYear != 4.25 {
 		t.Errorf("TenYear: got %.2f, want 4.25", s.TenYear)
