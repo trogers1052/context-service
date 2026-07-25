@@ -9,6 +9,7 @@ import (
 	jsoniter "github.com/json-iterator/go"
 
 	"github.com/trogers1052/context-service/internal/config"
+	"github.com/trogers1052/context-service/internal/history"
 	"github.com/trogers1052/context-service/internal/kafka"
 	"github.com/trogers1052/context-service/internal/macro"
 	"github.com/trogers1052/context-service/internal/metrics"
@@ -18,6 +19,13 @@ import (
 )
 
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
+
+const (
+	// historyLookback bounds how far back derivatives look for the temperature series.
+	historyLookback = 35 * 24 * time.Hour
+	// historyMaxPoints caps the rows pulled per publish for derivative computation.
+	historyMaxPoints = 5000
+)
 
 // IndicatorEvent represents an incoming indicator message from analytics-service.
 //
@@ -92,6 +100,10 @@ type ContextService struct {
 	// sentimentFetcher provides market-sentiment gauges. Currently a stub that
 	// reports unavailable until a real source (CNN Fear & Greed) is wired.
 	sentimentFetcher sentiment.Fetcher
+
+	// historyWriter banks market-context snapshots to TimescaleDB and feeds the
+	// temperature derivatives. Nil when history is disabled or unreachable.
+	historyWriter *history.Writer
 
 	// Track which symbols we care about
 	trackedSymbols map[string]bool
@@ -182,6 +194,21 @@ func (s *ContextService) Initialize(ctx context.Context) error {
 		}
 	} else {
 		log.Println("FRED_API_KEY not set — macro signals (VIX, HY spreads) disabled")
+	}
+
+	// Initialize capital-temperature history (optional). A failure here is
+	// non-fatal: the service still runs and publishes, just without banked
+	// history or temperature derivatives.
+	if s.config.TimescaleDSN != "" {
+		hw, err := history.New(ctx, s.config.TimescaleDSN)
+		if err != nil {
+			log.Printf("Warning: capital-temperature history disabled: %v", err)
+		} else {
+			s.historyWriter = hw
+			log.Println("Capital-temperature history: connected to TimescaleDB")
+		}
+	} else {
+		log.Println("TIMESCALE_HOST not set — capital-temperature history disabled")
 	}
 
 	log.Println("Context service initialized")
@@ -280,6 +307,17 @@ func (s *ContextService) maybePublishContext() {
 	// (credit, vol, curve, recession, trend, breadth). Nil when nothing is set.
 	marketCtx.CapitalTemperature = regime.ComputeCapitalTemperature(marketCtx)
 
+	// Attach temperature derivatives (velocity/accel/percentile) from banked
+	// history. Best-effort: a query failure leaves the scalar temperature intact.
+	if marketCtx.CapitalTemperature != nil && s.historyWriter != nil {
+		since := marketCtx.UpdatedAt.Add(-historyLookback)
+		if pts, err := s.historyWriter.RecentTemperatures(s.bgContext(), since, historyMaxPoints); err != nil {
+			log.Printf("history: recent temperatures query failed: %v", err)
+		} else {
+			regime.AttachDerivatives(marketCtx.CapitalTemperature, toSamples(pts), marketCtx.UpdatedAt)
+		}
+	}
+
 	// Check if context has meaningfully changed
 	if !s.hasContextChanged(marketCtx) {
 		return
@@ -371,6 +409,18 @@ func (s *ContextService) publishContext(marketCtx *regime.MarketContext) {
 		metrics.KafkaPublished.WithLabelValues(reason).Inc()
 		log.Printf("Published context to Kafka: regime=%s confidence=%.2f",
 			marketCtx.Regime, marketCtx.RegimeConfidence)
+	}
+
+	// Bank the snapshot for temperature history (best-effort).
+	if s.historyWriter != nil {
+		var temp *float64
+		if marketCtx.CapitalTemperature != nil {
+			v := marketCtx.CapitalTemperature.Value
+			temp = &v
+		}
+		if err := s.historyWriter.Write(ctx, marketCtx.UpdatedAt, contextJSON, temp); err != nil {
+			log.Printf("history: write failed: %v", err)
+		}
 	}
 
 	// Update sector strength gauges
@@ -470,6 +520,9 @@ func (s *ContextService) Stop() {
 	if s.redis != nil {
 		s.redis.Close()
 	}
+	if s.historyWriter != nil {
+		s.historyWriter.Close()
+	}
 
 	log.Println("Context service stopped")
 }
@@ -479,4 +532,21 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+// bgContext returns the service context, or a background context before Start().
+func (s *ContextService) bgContext() context.Context {
+	if s.ctx != nil {
+		return s.ctx
+	}
+	return context.Background()
+}
+
+// toSamples converts banked history points to regime temperature samples.
+func toSamples(pts []history.TemperaturePoint) []regime.TempSample {
+	out := make([]regime.TempSample, len(pts))
+	for i, p := range pts {
+		out[i] = regime.TempSample{Time: p.Time, Value: p.Value}
+	}
+	return out
 }

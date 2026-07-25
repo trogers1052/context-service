@@ -2,6 +2,7 @@ package regime
 
 import (
 	"math"
+	"time"
 
 	"github.com/trogers1052/context-service/internal/macro"
 )
@@ -16,6 +17,126 @@ type CapitalTemperature struct {
 	Value      float64            `json:"value"`                // 0..1
 	Components map[string]float64 `json:"components,omitempty"` // per-signal sub-score (0..1)
 	Inputs     int                `json:"inputs"`               // signals that contributed
+
+	// Derivatives (C11) — populated by AttachDerivatives from banked history.
+	// Zero/absent until enough history has accumulated.
+	EMAFast      float64 `json:"ema_fast,omitempty"`
+	EMASlow      float64 `json:"ema_slow,omitempty"`
+	Velocity1w   float64 `json:"velocity_1w,omitempty"`
+	Velocity4w   float64 `json:"velocity_4w,omitempty"`
+	Acceleration float64 `json:"acceleration,omitempty"`
+	Direction    string  `json:"direction,omitempty"` // HEATING | COOLING | STABLE
+	Percentile   float64 `json:"percentile,omitempty"`
+}
+
+// Temperature direction (sign of 1-week velocity, with a deadband).
+const (
+	DirHeating = "HEATING"
+	DirCooling = "COOLING"
+	DirStable  = "STABLE"
+)
+
+const (
+	emaFastSpan      = 3
+	emaSlowSpan      = 10
+	velocityDeadband = 0.01
+)
+
+// TempSample is one capital-temperature reading at a point in time, used to
+// compute the derivatives (C11).
+type TempSample struct {
+	Time  time.Time
+	Value float64
+}
+
+// AttachDerivatives computes velocity / acceleration / direction / percentile
+// from the prior temperature history plus the current value (ct.Value at now)
+// and sets them on ct.
+//
+// The velocity is measured on the EMA-smoothed series (differentiating a raw
+// noisy series would just amplify the noise), over time-based 1-week / 4-week
+// windows. With too little history it leaves the derivative fields at their
+// zero values (omitted from JSON).
+func AttachDerivatives(ct *CapitalTemperature, prior []TempSample, now time.Time) {
+	if ct == nil {
+		return
+	}
+	series := make([]TempSample, 0, len(prior)+1)
+	series = append(series, prior...)
+	series = append(series, TempSample{Time: now, Value: ct.Value})
+	if len(series) < 2 {
+		return
+	}
+
+	fast := emaSeries(series, emaFastSpan)
+	slow := emaSeries(series, emaSlowSpan)
+	last := len(series) - 1
+	ct.EMAFast = round4(fast[last])
+	ct.EMASlow = round4(slow[last])
+
+	f7 := emaAtOrBefore(series, fast, now.Add(-7*24*time.Hour))
+	f14 := emaAtOrBefore(series, fast, now.Add(-14*24*time.Hour))
+	f28 := emaAtOrBefore(series, fast, now.Add(-28*24*time.Hour))
+
+	ct.Velocity1w = round4(fast[last] - f7)
+	ct.Velocity4w = round4(fast[last] - f28)
+	// Second difference over consecutive weekly windows: is the heating/cooling
+	// itself building (+) or fading (−)?
+	ct.Acceleration = round4((fast[last] - f7) - (f7 - f14))
+	ct.Direction = classifyDirection(ct.Velocity1w)
+	ct.Percentile = round4(percentileOf(series, ct.Value))
+}
+
+// emaSeries returns the EMA-smoothed value sequence (seeded with the first value).
+func emaSeries(s []TempSample, span int) []float64 {
+	out := make([]float64, len(s))
+	if len(s) == 0 {
+		return out
+	}
+	alpha := 2.0 / (float64(span) + 1.0)
+	out[0] = s[0].Value
+	for i := 1; i < len(s); i++ {
+		out[i] = alpha*s[i].Value + (1-alpha)*out[i-1]
+	}
+	return out
+}
+
+// emaAtOrBefore returns the ema value at the latest sample whose time is at or
+// before t; if t precedes all samples it returns the earliest ema value.
+func emaAtOrBefore(s []TempSample, ema []float64, t time.Time) float64 {
+	idx := 0
+	for i := range s {
+		if s[i].Time.After(t) {
+			break
+		}
+		idx = i
+	}
+	return ema[idx]
+}
+
+func classifyDirection(v float64) string {
+	switch {
+	case v > velocityDeadband:
+		return DirHeating
+	case v < -velocityDeadband:
+		return DirCooling
+	default:
+		return DirStable
+	}
+}
+
+// percentileOf returns the fraction of samples with value <= v (0..1).
+func percentileOf(s []TempSample, v float64) float64 {
+	if len(s) == 0 {
+		return 0
+	}
+	le := 0
+	for i := range s {
+		if s[i].Value <= v {
+			le++
+		}
+	}
+	return float64(le) / float64(len(s))
 }
 
 // temperatureWeights weights each sub-signal's contribution. Credit and the

@@ -2,6 +2,7 @@ package regime_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/trogers1052/context-service/internal/macro"
 	"github.com/trogers1052/context-service/internal/regime"
@@ -91,5 +92,73 @@ func TestComputeCapitalTemperature_UnavailableMacro_UsesTrendBreadthOnly(t *test
 	}
 	if ct.Inputs != 2 {
 		t.Errorf("unavailable macro must contribute nothing: expected 2 inputs, got %d", ct.Inputs)
+	}
+}
+
+// ---- AttachDerivatives (C11) ----------------------------------------------
+
+func TestAttachDerivatives_TooFewPoints_NoOp(t *testing.T) {
+	ct := &regime.CapitalTemperature{Value: 0.5}
+	regime.AttachDerivatives(ct, nil, time.Now())
+	if ct.Direction != "" || ct.Velocity1w != 0 {
+		t.Errorf("with no history, derivatives should be unset, got %+v", ct)
+	}
+}
+
+func TestAttachDerivatives_Heating(t *testing.T) {
+	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	prior := []regime.TempSample{
+		{Time: now.Add(-28 * 24 * time.Hour), Value: 0.30},
+		{Time: now.Add(-21 * 24 * time.Hour), Value: 0.35},
+		{Time: now.Add(-14 * 24 * time.Hour), Value: 0.45},
+		{Time: now.Add(-7 * 24 * time.Hour), Value: 0.60},
+	}
+	ct := &regime.CapitalTemperature{Value: 0.75}
+	regime.AttachDerivatives(ct, prior, now)
+
+	if ct.Direction != regime.DirHeating {
+		t.Errorf("Direction: got %s, want HEATING", ct.Direction)
+	}
+	if ct.Velocity1w <= 0 {
+		t.Errorf("Velocity1w should be positive when heating, got %.4f", ct.Velocity1w)
+	}
+	if ct.Velocity4w <= 0 {
+		t.Errorf("Velocity4w should be positive, got %.4f", ct.Velocity4w)
+	}
+	if ct.Percentile < 0.99 { // current 0.75 is the series max → 5/5
+		t.Errorf("Percentile: got %.2f, want ~1.0 (current is the max)", ct.Percentile)
+	}
+}
+
+func TestAttachDerivatives_Cooling(t *testing.T) {
+	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	prior := []regime.TempSample{
+		{Time: now.Add(-28 * 24 * time.Hour), Value: 0.80},
+		{Time: now.Add(-21 * 24 * time.Hour), Value: 0.70},
+		{Time: now.Add(-14 * 24 * time.Hour), Value: 0.60},
+		{Time: now.Add(-7 * 24 * time.Hour), Value: 0.45},
+	}
+	ct := &regime.CapitalTemperature{Value: 0.30}
+	regime.AttachDerivatives(ct, prior, now)
+
+	if ct.Direction != regime.DirCooling {
+		t.Errorf("Direction: got %s, want COOLING", ct.Direction)
+	}
+	if ct.Velocity1w >= 0 {
+		t.Errorf("Velocity1w should be negative when cooling, got %.4f", ct.Velocity1w)
+	}
+}
+
+func TestAttachDerivatives_Stable(t *testing.T) {
+	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	prior := []regime.TempSample{
+		{Time: now.Add(-14 * 24 * time.Hour), Value: 0.50},
+		{Time: now.Add(-7 * 24 * time.Hour), Value: 0.50},
+	}
+	ct := &regime.CapitalTemperature{Value: 0.50}
+	regime.AttachDerivatives(ct, prior, now)
+
+	if ct.Direction != regime.DirStable {
+		t.Errorf("Direction: got %s, want STABLE for a flat series", ct.Direction)
 	}
 }
