@@ -48,18 +48,19 @@ type SymbolRegime struct {
 
 // MarketContext represents the overall market context
 type MarketContext struct {
-	Regime           Regime              `json:"regime"`
-	RegimeConfidence float64             `json:"regime_confidence"`
-	SPYRegime        *SymbolRegime       `json:"spy_regime,omitempty"`
-	QQQRegime        *SymbolRegime       `json:"qqq_regime,omitempty"`
-	SectorStrength   map[string]float64  `json:"sector_strength,omitempty"`
-	SectorLeaders    []string            `json:"sector_leaders,omitempty"`
-	SectorLaggards   []string            `json:"sector_laggards,omitempty"`
-	SP500Trend       *SP500Trend         `json:"sp500_trend,omitempty"`
-	Breadth          *Breadth            `json:"breadth,omitempty"`
-	MacroSignals     *macro.MacroSignals `json:"macro_signals,omitempty"`
-	Timestamp        time.Time           `json:"timestamp"`
-	UpdatedAt        time.Time           `json:"updated_at"`
+	Regime             Regime              `json:"regime"`
+	RegimeConfidence   float64             `json:"regime_confidence"`
+	SPYRegime          *SymbolRegime       `json:"spy_regime,omitempty"`
+	QQQRegime          *SymbolRegime       `json:"qqq_regime,omitempty"`
+	SectorStrength     map[string]float64  `json:"sector_strength,omitempty"`
+	SectorLeaders      []string            `json:"sector_leaders,omitempty"`
+	SectorLaggards     []string            `json:"sector_laggards,omitempty"`
+	SP500Trend         *SP500Trend         `json:"sp500_trend,omitempty"`
+	Breadth            *Breadth            `json:"breadth,omitempty"`
+	CapitalTemperature *CapitalTemperature `json:"capital_temperature,omitempty"`
+	MacroSignals       *macro.MacroSignals `json:"macro_signals,omitempty"`
+	Timestamp          time.Time           `json:"timestamp"`
+	UpdatedAt          time.Time           `json:"updated_at"`
 }
 
 // Moving-average cross states for the S&P 500 (50-day vs 200-day).

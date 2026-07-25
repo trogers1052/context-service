@@ -262,6 +262,10 @@ func (s *ContextService) maybePublishContext() {
 		regime.ApplyMacroAdjustments(marketCtx, s.macroFetcher.Get())
 	}
 
+	// Synthesise the 0..1 capital-temperature gauge from all available signals
+	// (credit, vol, curve, recession, trend, breadth). Nil when nothing is set.
+	marketCtx.CapitalTemperature = regime.ComputeCapitalTemperature(marketCtx)
+
 	// Check if context has meaningfully changed
 	if !s.hasContextChanged(marketCtx) {
 		return
