@@ -4,9 +4,8 @@ on:
   push:
     branches:
       - main
+  # Run tests on every PR regardless of base branch, so stacked PRs are covered.
   pull_request:
-    branches:
-      - main
 
 jobs:
   test:
@@ -31,7 +30,7 @@ jobs:
           test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
 
       - name: Run tests
-        run: go test ./...
+        run: go test -race ./...
 
   build:
     name: Build ARM64 Binary

@@ -77,6 +77,40 @@ func TestClassifyHY_CrisisRange_ReturnsCrisis(t *testing.T) {
 	}
 }
 
+// ---- ClassifyIG ------------------------------------------------------------
+
+func TestClassifyIG_BelowTight_ReturnsTight(t *testing.T) {
+	for _, v := range []float64{0.4, 0.8, 0.99} {
+		if got := macro.ClassifyIG(v); got != macro.IGLevelTight {
+			t.Errorf("IG=%.2f: got %s, want TIGHT", v, got)
+		}
+	}
+}
+
+func TestClassifyIG_NormalRange_ReturnsNormal(t *testing.T) {
+	for _, v := range []float64{1.0, 1.5, 1.99} {
+		if got := macro.ClassifyIG(v); got != macro.IGLevelNormal {
+			t.Errorf("IG=%.2f: got %s, want NORMAL", v, got)
+		}
+	}
+}
+
+func TestClassifyIG_WideRange_ReturnsWide(t *testing.T) {
+	for _, v := range []float64{2.0, 2.5, 2.99} {
+		if got := macro.ClassifyIG(v); got != macro.IGLevelWide {
+			t.Errorf("IG=%.2f: got %s, want WIDE", v, got)
+		}
+	}
+}
+
+func TestClassifyIG_CrisisRange_ReturnsCrisis(t *testing.T) {
+	for _, v := range []float64{3.0, 4.0, 6.5} {
+		if got := macro.ClassifyIG(v); got != macro.IGLevelCrisis {
+			t.Errorf("IG=%.2f: got %s, want CRISIS", v, got)
+		}
+	}
+}
+
 // ---- Fetcher.Get before Refresh --------------------------------------------
 
 func TestFetcher_Get_BeforeRefresh_NotAvailable(t *testing.T) {
@@ -103,14 +137,16 @@ func makeFREDResponse(value string) []byte {
 }
 
 // newMockFREDServer returns an httptest.Server that serves fixed values for
-// VIXCLS and BAMLH0A0HYM2.
-func newMockFREDServer(vixValue, hyValue string) *httptest.Server {
+// VIXCLS, BAMLH0A0HYM2, and BAMLC0A0CM.
+func newMockFREDServer(vixValue, hyValue, igValue string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("series_id") {
 		case "VIXCLS":
 			w.Write(makeFREDResponse(vixValue))
 		case "BAMLH0A0HYM2":
 			w.Write(makeFREDResponse(hyValue))
+		case "BAMLC0A0CM":
+			w.Write(makeFREDResponse(igValue))
 		default:
 			http.Error(w, "unknown series", http.StatusBadRequest)
 		}
@@ -120,7 +156,7 @@ func newMockFREDServer(vixValue, hyValue string) *httptest.Server {
 // ---- Fetcher.Refresh — happy path ------------------------------------------
 
 func TestFetcher_Refresh_Success_ParsedCorrectly(t *testing.T) {
-	srv := newMockFREDServer("18.50", "4.20")
+	srv := newMockFREDServer("18.50", "4.20", "1.20")
 	defer srv.Close()
 
 	f := macro.NewFetcherWithBaseURL("key", srv.URL)
@@ -144,13 +180,22 @@ func TestFetcher_Refresh_Success_ParsedCorrectly(t *testing.T) {
 	if s.HYLevel != macro.HYLevelNormal {
 		t.Errorf("HYLevel: got %s, want NORMAL", s.HYLevel)
 	}
+	if s.IGSpread != 1.2 {
+		t.Errorf("IGSpread: got %.2f, want 1.20", s.IGSpread)
+	}
+	if s.IGLevel != macro.IGLevelNormal {
+		t.Errorf("IGLevel: got %s, want NORMAL", s.IGLevel)
+	}
+	if s.QualitySpread != 3.0 {
+		t.Errorf("QualitySpread: got %.2f, want 3.00 (HY 4.20 − IG 1.20)", s.QualitySpread)
+	}
 	if s.FetchedAt.IsZero() {
 		t.Error("FetchedAt should be set after a successful Refresh")
 	}
 }
 
 func TestFetcher_Refresh_HighVIX_ClassifiedAsCrisis(t *testing.T) {
-	srv := newMockFREDServer("38.00", "4.00")
+	srv := newMockFREDServer("38.00", "4.00", "1.50")
 	defer srv.Close()
 
 	f := macro.NewFetcherWithBaseURL("key", srv.URL)
@@ -163,7 +208,7 @@ func TestFetcher_Refresh_HighVIX_ClassifiedAsCrisis(t *testing.T) {
 }
 
 func TestFetcher_Refresh_HighHYSpread_ClassifiedAsCrisis(t *testing.T) {
-	srv := newMockFREDServer("20.00", "8.50")
+	srv := newMockFREDServer("20.00", "8.50", "1.50")
 	defer srv.Close()
 
 	f := macro.NewFetcherWithBaseURL("key", srv.URL)
@@ -172,6 +217,19 @@ func TestFetcher_Refresh_HighHYSpread_ClassifiedAsCrisis(t *testing.T) {
 	}
 	if s := f.Get(); s.HYLevel != macro.HYLevelCrisis {
 		t.Errorf("HYLevel: got %s, want CRISIS for HY=8.50", s.HYLevel)
+	}
+}
+
+func TestFetcher_Refresh_WideIGSpread_ClassifiedAsCrisis(t *testing.T) {
+	srv := newMockFREDServer("20.00", "4.00", "3.50")
+	defer srv.Close()
+
+	f := macro.NewFetcherWithBaseURL("key", srv.URL)
+	if err := f.Refresh(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s := f.Get(); s.IGLevel != macro.IGLevelCrisis {
+		t.Errorf("IGLevel: got %s, want CRISIS for IG=3.50", s.IGLevel)
 	}
 }
 
@@ -187,6 +245,8 @@ func TestFetcher_Refresh_SkipsDotValues_UsesNextValid(t *testing.T) {
 			w.Write([]byte(body))
 		case "BAMLH0A0HYM2":
 			w.Write(makeFREDResponse("3.80"))
+		case "BAMLC0A0CM":
+			w.Write(makeFREDResponse("1.10"))
 		}
 	}))
 	defer srv.Close()
@@ -247,7 +307,7 @@ func TestFetcher_Refresh_MalformedJSON_ReturnsError(t *testing.T) {
 
 func TestFetcher_Refresh_FailureDoesNotClearPreviousGoodValue(t *testing.T) {
 	// First refresh succeeds.
-	goodSrv := newMockFREDServer("18.50", "4.20")
+	goodSrv := newMockFREDServer("18.50", "4.20", "1.20")
 	defer goodSrv.Close()
 
 	f := macro.NewFetcherWithBaseURL("key", goodSrv.URL)
@@ -286,5 +346,128 @@ func TestFetcher_Refresh_FailureDoesNotClearPreviousGoodValue(t *testing.T) {
 	// f's cached value should still be usable.
 	if s := f.Get(); !s.Available {
 		t.Error("cached value should remain after a failed refresh attempt")
+	}
+}
+
+// ---- ClassifyCurve ---------------------------------------------------------
+
+func TestClassifyCurve(t *testing.T) {
+	cases := []struct {
+		spread float64
+		want   string
+	}{
+		{-0.50, macro.CurveInverted},
+		{-0.01, macro.CurveInverted},
+		{0.00, macro.CurveFlat},
+		{0.25, macro.CurveFlat},
+		{0.49, macro.CurveFlat},
+		{0.50, macro.CurveNormal},
+		{1.00, macro.CurveNormal},
+		{1.49, macro.CurveNormal},
+		{1.50, macro.CurveSteep},
+		{2.50, macro.CurveSteep},
+	}
+	for _, c := range cases {
+		if got := macro.ClassifyCurve(c.spread); got != c.want {
+			t.Errorf("ClassifyCurve(%.2f): got %s, want %s", c.spread, got, c.want)
+		}
+	}
+}
+
+// ---- ClassifyTermStructure -------------------------------------------------
+
+func TestClassifyTermStructure(t *testing.T) {
+	cases := []struct {
+		ratio float64
+		want  string
+	}{
+		{1.20, macro.TermBackwardation},
+		{1.00, macro.TermBackwardation},
+		{0.98, macro.TermFlat},
+		{0.96, macro.TermFlat},
+		{0.95, macro.TermContango},
+		{0.90, macro.TermContango},
+	}
+	for _, c := range cases {
+		if got := macro.ClassifyTermStructure(c.ratio); got != c.want {
+			t.Errorf("ClassifyTermStructure(%.2f): got %s, want %s", c.ratio, got, c.want)
+		}
+	}
+}
+
+// ---- Optional (peripheral) macro series ------------------------------------
+
+// newFullFREDServer serves any series present in vals and 400s the rest, so a
+// test can exercise both the happy path and best-effort absence.
+func newFullFREDServer(vals map[string]string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if v, ok := vals[r.URL.Query().Get("series_id")]; ok {
+			w.Write(makeFREDResponse(v))
+			return
+		}
+		http.Error(w, "unknown series", http.StatusBadRequest)
+	}))
+}
+
+func TestFetcher_Refresh_OptionalSeries_Parsed(t *testing.T) {
+	srv := newFullFREDServer(map[string]string{
+		"VIXCLS":       "18.00",
+		"BAMLH0A0HYM2": "4.00",
+		"BAMLC0A0CM":   "1.20",
+		"T10Y2Y":       "-0.30",
+		"DGS10":        "4.25",
+		"DTWEXBGS":     "121.50",
+		"ICSA4WSA":     "232000",
+		"SAHMREALTIME": "0.60",
+		"VXVCLS":       "14.00",
+	})
+	defer srv.Close()
+
+	f := macro.NewFetcherWithBaseURL("key", srv.URL)
+	if err := f.Refresh(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s := f.Get()
+	if s.CurveState != macro.CurveInverted {
+		t.Errorf("CurveState: got %s, want INVERTED for 10Y2Y=-0.30", s.CurveState)
+	}
+	if s.VIX3M != 14.0 {
+		t.Errorf("VIX3M: got %.2f, want 14.00", s.VIX3M)
+	}
+	if s.TermStructureState != macro.TermBackwardation {
+		t.Errorf("TermStructureState: got %s, want BACKWARDATION (VIX 18 / VIX3M 14)", s.TermStructureState)
+	}
+	if s.TenYear != 4.25 {
+		t.Errorf("TenYear: got %.2f, want 4.25", s.TenYear)
+	}
+	if s.DXY != 121.5 {
+		t.Errorf("DXY: got %.2f, want 121.50", s.DXY)
+	}
+	if s.JoblessClaims4wk != 232000 {
+		t.Errorf("JoblessClaims4wk: got %.0f, want 232000", s.JoblessClaims4wk)
+	}
+	if !s.SahmTriggered {
+		t.Error("SahmTriggered: got false, want true for Sahm=0.60")
+	}
+}
+
+func TestFetcher_Refresh_MissingOptionalSeries_CoreStillAvailable(t *testing.T) {
+	// Server serves only the core series; peripheral fetches 400 → best-effort.
+	srv := newMockFREDServer("18.00", "4.00", "1.20")
+	defer srv.Close()
+
+	f := macro.NewFetcherWithBaseURL("key", srv.URL)
+	if err := f.Refresh(); err != nil {
+		t.Fatalf("core refresh should succeed even when optional series are absent: %v", err)
+	}
+	s := f.Get()
+	if !s.Available {
+		t.Error("Available: core signals should be available")
+	}
+	if s.CurveState != "" {
+		t.Errorf("CurveState: got %q, want empty when T10Y2Y unavailable", s.CurveState)
+	}
+	if s.SahmTriggered {
+		t.Error("SahmTriggered should be false when SAHMREALTIME unavailable")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/trogers1052/context-service/internal/macro"
+	"github.com/trogers1052/context-service/internal/sentiment"
 )
 
 // Regime represents the market regime classification
@@ -48,16 +49,52 @@ type SymbolRegime struct {
 
 // MarketContext represents the overall market context
 type MarketContext struct {
-	Regime           Regime              `json:"regime"`
-	RegimeConfidence float64             `json:"regime_confidence"`
-	SPYRegime        *SymbolRegime       `json:"spy_regime,omitempty"`
-	QQQRegime        *SymbolRegime       `json:"qqq_regime,omitempty"`
-	SectorStrength   map[string]float64  `json:"sector_strength,omitempty"`
-	SectorLeaders    []string            `json:"sector_leaders,omitempty"`
-	SectorLaggards   []string            `json:"sector_laggards,omitempty"`
-	MacroSignals     *macro.MacroSignals `json:"macro_signals,omitempty"`
-	Timestamp        time.Time           `json:"timestamp"`
-	UpdatedAt        time.Time           `json:"updated_at"`
+	Regime             Regime              `json:"regime"`
+	RegimeConfidence   float64             `json:"regime_confidence"`
+	SPYRegime          *SymbolRegime       `json:"spy_regime,omitempty"`
+	QQQRegime          *SymbolRegime       `json:"qqq_regime,omitempty"`
+	SectorStrength     map[string]float64  `json:"sector_strength,omitempty"`
+	SectorLeaders      []string            `json:"sector_leaders,omitempty"`
+	SectorLaggards     []string            `json:"sector_laggards,omitempty"`
+	SP500Trend         *SP500Trend         `json:"sp500_trend,omitempty"`
+	Breadth            *Breadth            `json:"breadth,omitempty"`
+	CapitalTemperature *CapitalTemperature `json:"capital_temperature,omitempty"`
+	Sentiment          *sentiment.Signals  `json:"sentiment,omitempty"`
+	MacroSignals       *macro.MacroSignals `json:"macro_signals,omitempty"`
+	Timestamp          time.Time           `json:"timestamp"`
+	UpdatedAt          time.Time           `json:"updated_at"`
+}
+
+// Moving-average cross states for the S&P 500 (50-day vs 200-day).
+const (
+	CrossGolden  = "GOLDEN"  // 50-day above 200-day
+	CrossDeath   = "DEATH"   // 50-day below 200-day
+	CrossNeutral = "NEUTRAL" // equal, or 50-day unavailable
+)
+
+// SP500Trend captures the S&P 500 proxy's (SPY) position relative to its key
+// moving averages — the Tier-1 "primary trend" signal for the 401(k)
+// break-glass. Nil when SPY data (or its 200-day SMA) is unavailable.
+type SP500Trend struct {
+	Close      float64 `json:"close"`
+	SMA50      float64 `json:"sma_50"`
+	SMA200     float64 `json:"sma_200"`
+	VsSMA200   float64 `json:"vs_sma_200"` // % above (+) / below (−) the 200-day
+	VsSMA50    float64 `json:"vs_sma_50"`  // % above (+) / below (−) the 50-day
+	Above200   bool    `json:"above_200"`
+	Above50    bool    `json:"above_50"`
+	CrossState string  `json:"cross_state"` // GOLDEN | DEATH | NEUTRAL
+}
+
+// Breadth measures participation across the tracked ETF universe: the share of
+// symbols trading above their 50- and 200-day moving averages. This is v1
+// breadth over the ~17 regime+sector ETFs; true S&P 500 constituent breadth is
+// a deferred upgrade (needs constituent-level ingestion).
+type Breadth struct {
+	PctAbove200 float64 `json:"pct_above_200"`
+	PctAbove50  float64 `json:"pct_above_50"`
+	Count       int     `json:"count"`    // symbols with valid 200-day data
+	Universe    int     `json:"universe"` // total symbols considered
 }
 
 // Detector analyzes indicators to determine market regime
@@ -235,7 +272,95 @@ func (d *Detector) GetMarketContext() *MarketContext {
 	// Calculate sector strength relative to SPY
 	d.calculateSectorStrength(ctx)
 
+	// S&P 500 (SPY proxy) primary-trend signal and tracked-universe breadth.
+	ctx.SP500Trend = d.computeSP500Trend()
+	ctx.Breadth = d.computeBreadth()
+
 	return ctx
+}
+
+// computeSP500Trend builds the SP500Trend from SPY's latest indicators.
+// Returns nil when SPY data or its 200-day SMA is missing.
+func (d *Detector) computeSP500Trend() *SP500Trend {
+	d.mu.RLock()
+	spy := d.symbolIndicators["SPY"]
+	d.mu.RUnlock()
+
+	if spy == nil || spy.SMA200 == 0 || spy.Close == 0 {
+		return nil
+	}
+
+	t := &SP500Trend{
+		Close:      spy.Close,
+		SMA50:      spy.SMA50,
+		SMA200:     spy.SMA200,
+		VsSMA200:   ((spy.Close - spy.SMA200) / spy.SMA200) * 100,
+		Above200:   spy.Close > spy.SMA200,
+		CrossState: CrossNeutral,
+	}
+
+	if spy.SMA50 != 0 {
+		t.VsSMA50 = ((spy.Close - spy.SMA50) / spy.SMA50) * 100
+		t.Above50 = spy.Close > spy.SMA50
+		switch {
+		case spy.SMA50 > spy.SMA200:
+			t.CrossState = CrossGolden
+		case spy.SMA50 < spy.SMA200:
+			t.CrossState = CrossDeath
+		}
+	}
+
+	return t
+}
+
+// computeBreadth measures the share of the tracked universe (regime + sector
+// symbols, de-duplicated) trading above their 50- and 200-day moving averages.
+// Returns nil when no symbol has valid moving-average data.
+func (d *Detector) computeBreadth() *Breadth {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	seen := make(map[string]bool)
+	symbols := make([]string, 0, len(d.regimeSymbols)+len(d.sectorSymbols))
+	for _, s := range append(append([]string{}, d.regimeSymbols...), d.sectorSymbols...) {
+		if !seen[s] {
+			seen[s] = true
+			symbols = append(symbols, s)
+		}
+	}
+
+	var above200, above50, valid200, valid50 int
+	for _, sym := range symbols {
+		ind := d.symbolIndicators[sym]
+		if ind == nil || ind.Close == 0 {
+			continue
+		}
+		if ind.SMA200 != 0 {
+			valid200++
+			if ind.Close > ind.SMA200 {
+				above200++
+			}
+		}
+		if ind.SMA50 != 0 {
+			valid50++
+			if ind.Close > ind.SMA50 {
+				above50++
+			}
+		}
+	}
+
+	if valid200 == 0 && valid50 == 0 {
+		return nil
+	}
+
+	b := &Breadth{Count: valid200, Universe: len(symbols)}
+	if valid200 > 0 {
+		b.PctAbove200 = float64(above200) / float64(valid200) * 100
+	}
+	if valid50 > 0 {
+		b.PctAbove50 = float64(above50) / float64(valid50) * 100
+	}
+	return b
 }
 
 // combineRegimes combines SPY and QQQ regimes into overall market regime
