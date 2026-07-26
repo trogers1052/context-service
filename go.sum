@@ -204,6 +204,8 @@ github.com/tklauser/go-sysconf v0.3.12 h1:0QaGUFOdQaIVdPgfITYzaTegZvdCjmYO52cSFA
 github.com/tklauser/go-sysconf v0.3.12/go.mod h1:Ho14jnntGE1fpdOqQEEaiKRpvIavV0hSfmBq8nJbHYI=
 github.com/tklauser/numcpus v0.6.1 h1:ng9scYS7az0Bk4OZLvrNXNSAO2Pxr1XXRAPyjhIx+Fk=
 github.com/tklauser/numcpus v0.6.1/go.mod h1:1XfjsgE2zo8GVw7POkMbHENHzVg3GzmoZ9fESEdAacY=
+github.com/trogers1052/trading-go-commons v0.5.0 h1:7nof8+gqHFx5i4GJeN6BE9XIB1QHuvLcpITXgIjjG8k=
+github.com/trogers1052/trading-go-commons v0.5.0/go.mod h1:y+o2n1MT/QDvjxGz8UnZxOG7mLrEYuVHYMwg+TOBLoI=
 github.com/trogers1052/trading-testkit v0.3.0 h1:SGAfzPTIH+reBklvNkTa5WdKqmLKmISnzbuaPJJX2XE=
 github.com/trogers1052/trading-testkit v0.3.0/go.mod h1:95wO7WtsqFZSb+Pg0OQ0yMQDhFxGO1FsY/r5ujEBUFs=
 github.com/twmb/franz-go v1.16.1 h1:rpWc7fB9jd7TgmCyfxzenBI+QbgS8ZfJOUQE+tzPtbE=
