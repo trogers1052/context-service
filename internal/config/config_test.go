@@ -221,6 +221,27 @@ func TestLoad_EnvOverride_FREDAPIKey(t *testing.T) {
 	}
 }
 
+// FRED_BASE_URL must default to empty, which the service reads as "use the
+// live API". A replay sets it to a stub serving historical series so that
+// replaying 2021 does not classify regimes from today's macro data.
+func TestLoad_DefaultFREDBaseURL_Empty(t *testing.T) {
+	os.Unsetenv("FRED_BASE_URL")
+
+	if cfg := Load(); cfg.FREDBaseURL != "" {
+		t.Errorf("FREDBaseURL: got %q, want empty (live API)", cfg.FREDBaseURL)
+	}
+}
+
+func TestLoad_EnvOverride_FREDBaseURL(t *testing.T) {
+	os.Setenv("FRED_BASE_URL", "http://fred-stub:8080/fred/series/observations")
+	defer os.Unsetenv("FRED_BASE_URL")
+
+	cfg := Load()
+	if cfg.FREDBaseURL != "http://fred-stub:8080/fred/series/observations" {
+		t.Errorf("FREDBaseURL: got %q, want the stub URL", cfg.FREDBaseURL)
+	}
+}
+
 func TestLoad_EnvOverride_LogLevel(t *testing.T) {
 	os.Setenv("LOG_LEVEL", "debug")
 	defer os.Unsetenv("LOG_LEVEL")

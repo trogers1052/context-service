@@ -105,3 +105,10 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// TEMPORARY — MUST BE REMOVED BEFORE MERGE.
+// The clock package this branch consumes lives on the trading-go-commons
+// branch feat/clock-package, which is not yet tagged or pushed. CI cannot
+// resolve a local sibling path, so this branch will fail CI until
+// trading-go-commons cuts a release and the require line below is bumped to it.
+replace github.com/trogers1052/trading-go-commons => ../trading-go-commons
