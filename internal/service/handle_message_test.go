@@ -313,7 +313,7 @@ func TestStop_NilConnections_DoesNotPanic(t *testing.T) {
 		RegimeSymbols: []string{"SPY"},
 		SectorSymbols: []string{},
 	}
-	svc := NewContextService(cfg)
+	svc := NewContextService(cfg, nil)
 	// consumer, producer, redis are all nil
 	// Stop should handle nil gracefully
 	svc.Stop()

@@ -193,7 +193,7 @@ func TestInitialize_RedisConnectFails_ReturnsError(t *testing.T) {
 		RegimeSymbols: []string{"SPY"},
 		// FREDAPIKey empty so macro init is skipped.
 	}
-	svc := NewContextService(cfg)
+	svc := NewContextService(cfg, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
