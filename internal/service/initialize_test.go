@@ -39,7 +39,7 @@ func TestInitialize_Success(t *testing.T) {
 		SectorSymbols: []string{"XLK"},
 		// FREDAPIKey empty -> exercises the "macro disabled" log branch.
 	}
-	svc := NewContextService(cfg)
+	svc := NewContextService(cfg, nil)
 	defer svc.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

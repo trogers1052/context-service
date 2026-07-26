@@ -17,7 +17,7 @@ func newTestService() *ContextService {
 		RegimeSymbols: []string{"SPY", "QQQ"},
 		SectorSymbols: []string{"XLK"},
 	}
-	return NewContextService(cfg)
+	return NewContextService(cfg, nil)
 }
 
 // makeContext builds a MarketContext with the given regime and confidence.
@@ -164,7 +164,7 @@ func TestNewContextService_TrackedSymbolsIncludeRegimeAndSector(t *testing.T) {
 		RegimeSymbols: []string{"SPY", "QQQ"},
 		SectorSymbols: []string{"XLK", "XLF"},
 	}
-	svc := NewContextService(cfg)
+	svc := NewContextService(cfg, nil)
 
 	for _, sym := range []string{"SPY", "QQQ", "XLK", "XLF"} {
 		if !svc.trackedSymbols[sym] {

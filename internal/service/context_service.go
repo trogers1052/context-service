@@ -9,6 +9,7 @@ import (
 	jsoniter "github.com/json-iterator/go"
 
 	"github.com/trogers1052/context-service/internal/config"
+	"github.com/trogers1052/context-service/internal/health"
 	"github.com/trogers1052/context-service/internal/history"
 	"github.com/trogers1052/context-service/internal/kafka"
 	"github.com/trogers1052/context-service/internal/macro"
@@ -97,6 +98,9 @@ type ContextService struct {
 	// macroFetcher polls FRED for VIX and HY spreads (nil when not configured).
 	macroFetcher *macro.Fetcher
 
+	// probe records a liveness heartbeat on each consumed message (nil = disabled).
+	probe *health.Probe
+
 	// sentimentFetcher provides market-sentiment gauges. Currently a stub that
 	// reports unavailable until a real source (CNN Fear & Greed) is wired.
 	sentimentFetcher sentiment.Fetcher
@@ -128,7 +132,7 @@ type ContextService struct {
 }
 
 // NewContextService creates a new context service
-func NewContextService(cfg *config.Config) *ContextService {
+func NewContextService(cfg *config.Config, probe *health.Probe) *ContextService {
 	// Build set of tracked symbols
 	tracked := make(map[string]bool)
 	for _, s := range cfg.RegimeSymbols {
@@ -140,6 +144,7 @@ func NewContextService(cfg *config.Config) *ContextService {
 
 	return &ContextService{
 		config:           cfg,
+		probe:            probe,
 		detector:         regime.NewDetector(cfg.RegimeSymbols, cfg.SectorSymbols),
 		trackedSymbols:   tracked,
 		sentimentFetcher: sentiment.NewStubFetcher(),
@@ -217,6 +222,11 @@ func (s *ContextService) Initialize(ctx context.Context) error {
 
 // handleMessage processes incoming indicator messages
 func (s *ContextService) handleMessage(key, value []byte) error {
+	// Liveness: a message reached the handler, so the consume loop is alive.
+	if s.probe != nil {
+		s.probe.Beat()
+	}
+
 	var event IndicatorEvent
 	if err := json.Unmarshal(value, &event); err != nil {
 		log.Printf("Failed to unmarshal indicator event: %v", err)

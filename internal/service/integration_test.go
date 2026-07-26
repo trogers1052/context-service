@@ -56,7 +56,7 @@ func TestIntegration_RealBroker_ConsumeProduceRoundTrip(t *testing.T) {
 		SectorSymbols: []string{"XLK"},
 		ContextKey:    "market:context",
 	}
-	svc := NewContextService(cfg)
+	svc := NewContextService(cfg, nil)
 
 	svc.consumer = kafka.NewConsumer(cfg.KafkaBrokers, cfg.InputTopic, cfg.ConsumerGroup, svc.handleMessage)
 	svc.producer = kafka.NewProducer(cfg.KafkaBrokers, cfg.OutputTopic)
