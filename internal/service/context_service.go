@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/trogers1052/context-service/internal/redis"
 	"github.com/trogers1052/context-service/internal/regime"
 	"github.com/trogers1052/context-service/internal/sentiment"
+	"github.com/trogers1052/trading-go-commons/clock"
 )
 
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
@@ -124,6 +126,12 @@ type ContextService struct {
 	rateLimitMu sync.Mutex
 	lastAttempt time.Time
 
+	// clock is the source of "now" for every logic gate below. Real by
+	// default; simulated when CLOCK_MODE=replay. Latency metrics deliberately
+	// keep using time.Now/time.Since — measuring how long a real HTTP call
+	// took in simulated time would record zero.
+	clock clock.Clock
+
 	// Stored context from Start() for use in callbacks
 	ctx context.Context
 
@@ -133,6 +141,10 @@ type ContextService struct {
 
 // NewContextService creates a new context service
 func NewContextService(cfg *config.Config, probe *health.Probe) *ContextService {
+	// Real clock by default. Initialize() swaps in the simulated clock when
+	// CLOCK_MODE=replay, once the Redis connection it reads from exists.
+	clk := clock.System()
+
 	// Build set of tracked symbols
 	tracked := make(map[string]bool)
 	for _, s := range cfg.RegimeSymbols {
@@ -145,10 +157,11 @@ func NewContextService(cfg *config.Config, probe *health.Probe) *ContextService 
 	return &ContextService{
 		config:           cfg,
 		probe:            probe,
-		detector:         regime.NewDetector(cfg.RegimeSymbols, cfg.SectorSymbols),
+		detector:         regime.NewDetectorWithClock(cfg.RegimeSymbols, cfg.SectorSymbols, clk),
 		trackedSymbols:   tracked,
 		sentimentFetcher: sentiment.NewStubFetcher(),
 		publishInterval:  30 * time.Second, // Publish at most every 30 seconds
+		clock:            clk,
 	}
 }
 
@@ -181,11 +194,26 @@ func (s *ContextService) Initialize(ctx context.Context) error {
 		return err
 	}
 
+	// Resolve the clock now that Redis is connected. Real unless
+	// CLOCK_MODE=replay, in which case this reads simulated time and fails
+	// here — at startup — if the replay driver has not published any, rather
+	// than silently producing a run stamped with today's date.
+	clk, err := clock.FromEnv(ctx, s.redis.Cmdable())
+	if err != nil {
+		return fmt.Errorf("resolving clock: %w", err)
+	}
+	s.clock = clk
+	s.detector.SetClock(clk)
+
 	// Initialize macro fetcher when FRED_API_KEY is set.
 	// The first refresh is best-effort — a failure here is non-fatal so the
 	// service can still run on technical indicators alone while FRED is down.
 	if s.config.FREDAPIKey != "" {
-		s.macroFetcher = macro.NewFetcher(s.config.FREDAPIKey)
+		s.macroFetcher = macro.New(macro.Options{
+			APIKey:  s.config.FREDAPIKey,
+			BaseURL: s.config.FREDBaseURL,
+			Clock:   clk,
+		})
 		fredStart := time.Now()
 		if err := s.macroFetcher.Refresh(); err != nil {
 			log.Printf("Warning: initial macro fetch failed: %v — will retry every 4h", err)
@@ -284,11 +312,11 @@ func (s *ContextService) maybePublishContext() {
 	// Use a dedicated mutex for the rate-limit gate so lastPublish (used for the
 	// 5-minute heartbeat check in hasContextChanged) is only updated on actual publish.
 	s.rateLimitMu.Lock()
-	if time.Since(s.lastAttempt) < s.publishInterval {
+	if s.clock.Now().Sub(s.lastAttempt) < s.publishInterval {
 		s.rateLimitMu.Unlock()
 		return
 	}
-	s.lastAttempt = time.Now() // claim the slot atomically
+	s.lastAttempt = s.clock.Now() // claim the slot atomically
 	s.rateLimitMu.Unlock()
 
 	// Need sufficient data
@@ -372,7 +400,7 @@ func (s *ContextService) hasContextChanged(ctx *regime.MarketContext) bool {
 	}
 
 	// Publish periodically even without change
-	if time.Since(s.lastPublish) > 5*time.Minute {
+	if s.clock.Now().Sub(s.lastPublish) > 5*time.Minute {
 		return true
 	}
 
@@ -441,7 +469,7 @@ func (s *ContextService) publishContext(marketCtx *regime.MarketContext) {
 	// Update last published context and timestamp
 	s.lastContextLock.Lock()
 	s.lastContext = marketCtx
-	s.lastPublish = time.Now()
+	s.lastPublish = s.clock.Now()
 	s.lastContextLock.Unlock()
 }
 

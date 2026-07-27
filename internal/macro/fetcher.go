@@ -32,11 +32,16 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/trogers1052/trading-go-commons/clock"
 )
 
-const (
-	fredBaseURL = "https://api.stlouisfed.org/fred/series/observations"
+// DefaultBaseURL is the live FRED observations endpoint. A replay points the
+// fetcher at a stub serving historical series instead, so that replaying 2021
+// does not classify regimes from today's macro data.
+const DefaultBaseURL = "https://api.stlouisfed.org/fred/series/observations"
 
+const (
 	// VIX thresholds
 	vixLow      = 15.0 // below → LOW (risk-on)
 	vixElevated = 25.0 // at or above → ELEVATED
@@ -141,29 +146,53 @@ type MacroSignals struct {
 // most recent result.  It is safe for concurrent use.
 type Fetcher struct {
 	apiKey  string
-	baseURL string // overridable for tests
+	baseURL string // overridable for tests and replay
+	clock   clock.Clock
 	client  *http.Client
 	mu      sync.RWMutex
 	current MacroSignals
 }
 
+// Options configures a Fetcher. Only APIKey is required; the zero value of
+// every other field selects the production default.
+type Options struct {
+	APIKey string
+
+	// BaseURL overrides the FRED endpoint. Empty means DefaultBaseURL.
+	BaseURL string
+
+	// Clock supplies the timestamp stamped onto fetched signals. Nil means the
+	// real system clock.
+	Clock clock.Clock
+}
+
+// New creates a Fetcher from opts.
+func New(opts Options) *Fetcher {
+	baseURL := opts.BaseURL
+	if baseURL == "" {
+		baseURL = DefaultBaseURL
+	}
+	clk := opts.Clock
+	if clk == nil {
+		clk = clock.System()
+	}
+	return &Fetcher{
+		apiKey:  opts.APIKey,
+		baseURL: baseURL,
+		clock:   clk,
+		client:  &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
 // NewFetcher creates a Fetcher that talks to the live FRED API.
 func NewFetcher(apiKey string) *Fetcher {
-	return newFetcher(apiKey, fredBaseURL)
+	return New(Options{APIKey: apiKey})
 }
 
 // NewFetcherWithBaseURL creates a Fetcher pointing at a custom base URL.
 // Intended for unit tests that spin up an httptest.Server.
 func NewFetcherWithBaseURL(apiKey, baseURL string) *Fetcher {
-	return newFetcher(apiKey, baseURL)
-}
-
-func newFetcher(apiKey, baseURL string) *Fetcher {
-	return &Fetcher{
-		apiKey:  apiKey,
-		baseURL: baseURL,
-		client:  &http.Client{Timeout: 10 * time.Second},
-	}
+	return New(Options{APIKey: apiKey, BaseURL: baseURL})
 }
 
 // Get returns the most recently cached macro signals.
@@ -232,7 +261,7 @@ func (f *Fetcher) Refresh() error {
 		JoblessClaims4wk:   claims4wk,
 		SahmRule:           sahm,
 		SahmTriggered:      sahmOK && sahm >= sahmTrigger,
-		FetchedAt:          time.Now(),
+		FetchedAt:          f.clock.Now(),
 		Available:          true,
 	}
 

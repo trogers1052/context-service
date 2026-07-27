@@ -28,6 +28,11 @@ type Config struct {
 	// Macro enrichment (optional)
 	FREDAPIKey string // FRED API key for VIX + HY spread fetching; empty disables macro signals
 
+	// FREDBaseURL overrides the FRED endpoint. Empty means the live API.
+	// A replay points this at a stub serving historical series, so that
+	// replaying 2021 does not classify regimes from today's macro data.
+	FREDBaseURL string
+
 	// Capital-temperature history (optional). Empty TimescaleDSN disables it —
 	// the service still runs and publishes, just without banked history or
 	// temperature derivatives.
@@ -57,7 +62,8 @@ func Load() *Config {
 			"XLB", "GDX", "GLD", "XME", "URA", "SIL", "REMX",
 		}, ","),
 
-		FREDAPIKey: env.String("FRED_API_KEY", ""),
+		FREDAPIKey:  env.String("FRED_API_KEY", ""),
+		FREDBaseURL: env.String("FRED_BASE_URL", ""),
 
 		TimescaleDSN: buildTimescaleDSN(),
 

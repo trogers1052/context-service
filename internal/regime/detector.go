@@ -7,6 +7,7 @@ import (
 
 	"github.com/trogers1052/context-service/internal/macro"
 	"github.com/trogers1052/context-service/internal/sentiment"
+	"github.com/trogers1052/trading-go-commons/clock"
 )
 
 // Regime represents the market regime classification
@@ -103,15 +104,51 @@ type Detector struct {
 	symbolIndicators map[string]*Indicators
 	regimeSymbols    []string
 	sectorSymbols    []string
+	clock            clock.Clock
 }
 
-// NewDetector creates a new regime detector
+// NewDetector creates a new regime detector driven by the real system clock.
 func NewDetector(regimeSymbols, sectorSymbols []string) *Detector {
+	return NewDetectorWithClock(regimeSymbols, sectorSymbols, clock.System())
+}
+
+// NewDetectorWithClock creates a regime detector that stamps published context
+// with clk. Under replay this is simulated time, so the Timestamp/UpdatedAt a
+// consumer sees matches the bar the context was derived from — decision-engine
+// gates on the age of that field, so a wall-clock stamp would make every
+// replayed context look freshly minted.
+func NewDetectorWithClock(regimeSymbols, sectorSymbols []string, clk clock.Clock) *Detector {
+	if clk == nil {
+		clk = clock.System()
+	}
 	return &Detector{
 		symbolIndicators: make(map[string]*Indicators),
 		regimeSymbols:    regimeSymbols,
 		sectorSymbols:    sectorSymbols,
+		clock:            clk,
 	}
+}
+
+// SetClock replaces the detector's clock.
+//
+// Intended for wiring only: the service resolves the replay clock after its
+// Redis connection exists, which is later than the detector is constructed.
+// Call it before the detector starts publishing.
+func (d *Detector) SetClock(clk clock.Clock) {
+	if clk == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.clock = clk
+}
+
+// currentClock returns the detector's clock under the read lock, so a
+// concurrent SetClock during wiring is not a data race.
+func (d *Detector) currentClock() clock.Clock {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.clock
 }
 
 // UpdateIndicators updates the indicators for a symbol
@@ -234,7 +271,7 @@ func (d *Detector) AnalyzeSymbol(symbol string) *SymbolRegime {
 
 // GetMarketContext computes the overall market context
 func (d *Detector) GetMarketContext() *MarketContext {
-	now := time.Now()
+	now := d.currentClock().Now()
 
 	ctx := &MarketContext{
 		Regime:         RegimeUnknown,

@@ -8,7 +8,7 @@ require (
 	github.com/json-iterator/go v1.1.12
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.20.0
-	github.com/trogers1052/trading-go-commons v0.4.0
+	github.com/trogers1052/trading-go-commons v0.5.0
 	github.com/trogers1052/trading-testkit v0.3.0
 )
 

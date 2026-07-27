@@ -100,7 +100,40 @@ A symbol is classified based on three conditions:
 | REGIME_SYMBOLS | SPY,QQQ | Symbols for regime detection |
 | SECTOR_SYMBOLS | XLK,XLF,XLE,... | Sector ETFs to track |
 | FRED_API_KEY | _(empty)_ | FRED API key for VIX + HY credit-spread fetching. When empty, macro signals are disabled and regime logic runs on technical indicators alone |
+| FRED_BASE_URL | _(empty)_ | Overrides the FRED endpoint. Empty means the live API; a replay points this at a stub serving historical series |
+| CLOCK_MODE | real | `replay` reads simulated time from Redis; anything else (including a typo) is real |
+| CLOCK_SIM_KEY | sim:clock | Redis key holding RFC3339Nano simulated time |
 | LOG_LEVEL | info | Log verbosity |
+
+## Replay mode
+
+The service reads "now" through `trading-go-commons/clock` rather than calling
+`time.Now()` directly, so the [e2e-replay](../e2e-replay) harness can drive it
+with simulated time. Four things are affected:
+
+- the `timestamp` / `updated_at` stamped onto published context (decision-engine
+  ages its staleness gate off these),
+- `fetched_at` on macro signals,
+- the 30-second publish rate-limit gate,
+- the 5-minute heartbeat re-publish check.
+
+Latency metrics (`FredFetchDuration`, `RedisWriteDuration`) deliberately keep
+using the wall clock — measuring how long a real HTTP call took in simulated
+time would record zero.
+
+**Production behaviour is unchanged.** `CLOCK_MODE` defaults to `real`, and any
+value other than exactly `replay` resolves to the real clock, so the service
+cannot be put onto a simulated clock by a typo. In replay mode `Initialize`
+fails fast if the driver has not published a simulated time, rather than
+producing a run quietly stamped with today's date.
+
+### Known limitation
+
+The FRED refresh is scheduled by a wall-clock `time.NewTicker(4 * time.Hour)`.
+Under a fast replay that ticker effectively never fires, so macro signals are
+fetched once at startup and not refreshed across the replayed period. Driving
+macro refresh from simulated time is a replay-driver concern and is deferred to
+the harness (phase 3) rather than being bolted onto the ticker here.
 
 ## Running Locally
 

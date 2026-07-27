@@ -48,6 +48,14 @@ func (c *Client) Connect(ctx context.Context) error {
 	return nil
 }
 
+// Cmdable exposes the underlying go-redis client.
+//
+// Needed so the replay clock can read simulated time over the same connection
+// the service already holds, rather than opening a second one.
+func (c *Client) Cmdable() redis.Cmdable {
+	return c.client
+}
+
 // PublishContext stores the market context in Redis
 func (c *Client) PublishContext(ctx context.Context, contextJSON []byte) error {
 	// Store the context with a TTL (in case service stops updating)
